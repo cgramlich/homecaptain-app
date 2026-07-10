@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="HomeCaptain" />
+<meta name="theme-color" content="#16201c" />
+<title>HomeCaptain</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+/* ============================================================
+   THEME TOKENS - deep evergreen "home" base, warm brass accent.
+   Reuses the MenuCaptain/Tracker design system (one palette here).
+   ============================================================ */
+:root{
+  --bg:#16201c;            /* evergreen base */
+  --bg-2:#1c2823;          /* raised surface */
+  --bg-3:#24322c;          /* card / input */
+  --bg-4:#2f4038;          /* hover / border-strong */
+  --line:#2f403833;        /* hairline */
+  --line-2:#3c5049;        /* visible border */
+  --ink:#eef3ee;           /* primary text, warm white */
+  --ink-2:#c1ccc4;         /* secondary text */
+  --ink-3:#8ba095;         /* muted text */
+  --amber:#d7a94b;         /* primary accent, brass */
+  --amber-2:#eac576;       /* lighter brass */
+  --amber-dim:#d7a94b22;   /* brass tint fill */
+  --amber-line:#d7a94b55;  /* brass border */
+  --green:#7fb08a;         /* done / success */
+  --blue:#6fa3c4;          /* info */
+  --red:#d1735c;           /* destructive / overdue */
+  --violet:#a98bc4;        /* accent alt */
+  --radius:14px;
+  --radius-sm:10px;
+  --radius-lg:20px;
+  --shadow:0 6px 24px -8px rgba(0,0,0,0.55);
+  --shadow-lg:0 18px 50px -12px rgba(0,0,0,0.7);
+  --nav-h:64px;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;padding:0;height:100%;}
+body{
+  background:
+    radial-gradient(120% 80% at 85% -10%, #1e2c26 0%, transparent 55%),
+    radial-gradient(140% 90% at -10% 110%, #1a2621 0%, transparent 50%),
+    var(--bg);
+  background-attachment:fixed;
+  color:var(--ink);
+  font-family:'Outfit',-apple-system,system-ui,sans-serif;
+  font-size:16px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  overscroll-behavior-y:none;
+}
+#root{min-height:100%;}
+h1,h2,h3,h4{font-family:'Fraunces',Georgia,serif;font-weight:600;margin:0;letter-spacing:-0.01em;}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;}
+input,textarea,select{font-family:inherit;font-size:16px;color:var(--ink);}
+::placeholder{color:var(--ink-3);}
+a{color:var(--amber);}
+svg{fill:none;stroke:currentColor;stroke-width:2;}
+
+/* ---------- layout ---------- */
+.app{max-width:680px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom));}
+.screen{flex:1;padding:0 18px 24px;animation:fade .35s var(--ease);}
+@keyframes fade{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+.topbar{position:sticky;top:0;z-index:40;padding:calc(env(safe-area-inset-top) + 14px) 18px 12px;
+  background:linear-gradient(180deg, var(--bg) 60%, transparent);}
+.topbar-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.eyebrow{font-family:'Outfit';font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--amber);font-weight:600;}
+.title{font-size:30px;line-height:1.05;margin-top:2px;}
+.title-sm{font-size:22px;}
+.subtle{color:var(--ink-3);font-size:13px;}
+.set-group{font-family:'Outfit';font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin:22px 4px 9px;}
+.updrow{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:4px 0 2px;}
+
+/* ---------- sync banner ---------- */
+.sync{display:flex;align-items:center;gap:8px;font-size:12px;padding:7px 12px;border-radius:999px;
+  margin-top:10px;border:1px solid var(--line-2);background:var(--bg-2);width:fit-content;transition:.3s;}
+.sync .dot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);}
+.sync.idle .dot{background:var(--green);}
+.sync.busy .dot{background:var(--amber);animation:pulse 1s infinite;}
+.sync.pending .dot{background:var(--blue);}
+.sync.error{border-color:var(--red);color:var(--red);}
+.sync.error .dot{background:var(--red);}
+@keyframes pulse{50%{opacity:.3;}}
+
+/* ---------- cards & lists ---------- */
+.card{background:var(--bg-3);border:1px solid var(--line-2);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow);}
+.list{display:flex;flex-direction:column;gap:10px;margin-top:14px;}
+.item{display:flex;gap:12px;align-items:flex-start;background:var(--bg-2);border:1px solid var(--line-2);
+  border-radius:var(--radius);padding:13px 14px;transition:.18s var(--ease);width:100%;text-align:left;}
+.item:active{transform:scale(.99);}
+.item-body{flex:1;min-width:0;}
+.item-title{font-size:15.5px;font-weight:500;line-height:1.35;word-break:break-word;}
+.item-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;align-items:center;}
+.chip{font-size:11px;padding:3px 9px;border-radius:999px;background:var(--bg-4);color:var(--ink-2);
+  display:inline-flex;align-items:center;gap:4px;font-weight:500;letter-spacing:.01em;}
+.chip.amber{background:var(--amber-dim);color:var(--amber-2);border:1px solid var(--amber-line);}
+.chip svg{width:12px;height:12px;flex:0 0 auto;}
+
+/* ---------- forms ---------- */
+.field{margin-bottom:14px;}
+.label{display:block;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:6px;font-weight:600;}
+.input,.textarea,.select{width:100%;background:var(--bg-3);border:1px solid var(--line-2);border-radius:var(--radius-sm);
+  padding:12px 13px;color:var(--ink);outline:none;transition:.18s;font-size:16px;}
+.input:focus,.textarea:focus,.select:focus{border-color:var(--amber-line);background:var(--bg-4);}
+.textarea{resize:vertical;min-height:84px;line-height:1.5;}
+.title-field{margin-bottom:18px;}
+.title-field .label{color:var(--amber);}
+.title-input{width:100%;background:var(--bg-3);border:1.5px solid var(--amber-line);border-radius:var(--radius);
+  padding:16px 15px;color:var(--ink);outline:none;transition:.18s;font-size:20px;font-weight:600;line-height:1.3;}
+.title-input::placeholder{color:var(--ink-3);font-weight:500;}
+.title-input:focus{border-color:var(--amber);background:var(--bg-4);box-shadow:0 0 0 3px var(--amber-dim);}
+.select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%238ba095' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:34px;}
+.row{display:flex;gap:10px;}
+.row>*{flex:1;}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 18px;border-radius:var(--radius-sm);
+  font-weight:600;font-size:15px;transition:.18s var(--ease);border:1px solid transparent;}
+.btn:active{transform:scale(.97);}
+.btn svg{width:15px;height:15px;flex:0 0 auto;}
+.btn-primary{background:var(--amber);color:#241a0c;}
+.btn-primary:active{background:var(--amber-2);}
+.btn-ghost{background:var(--bg-3);color:var(--ink);border-color:var(--line-2);}
+.btn-danger{background:#d1735c1a;color:var(--red);border-color:#d1735c55;}
+.btn-block{width:100%;}
+.btn-sm{padding:8px 13px;font-size:13px;}
+
+/* tabs / pills */
+.pills{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;}
+.pill{padding:6px 13px;border-radius:999px;font-size:12.5px;font-weight:600;background:var(--bg-2);border:1px solid var(--line-2);color:var(--ink-3);transition:.15s;}
+.pill.on{background:var(--amber);color:#241a0c;border-color:var(--amber);}
+
+/* empty state */
+.empty{text-align:center;padding:56px 20px;color:var(--ink-3);}
+.empty .glyph{font-family:'Fraunces';font-size:44px;color:var(--line-2);margin-bottom:10px;}
+.empty p{margin:6px 0 0;font-size:14px;}
+
+/* ---------- bottom nav ---------- */
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:50;height:calc(var(--nav-h) + env(safe-area-inset-bottom));
+  padding-bottom:env(safe-area-inset-bottom);
+  background:rgba(22,32,28,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border-top:1px solid var(--line-2);display:flex;align-items:center;justify-content:space-around;max-width:680px;margin:0 auto;}
+.nav-btn{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink-3);font-size:10px;font-weight:600;letter-spacing:.03em;padding:8px 0;transition:.15s;}
+.nav-btn.on{color:var(--amber);}
+.nav-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;}
+.icon-btn{flex:0 0 auto;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;
+  background:var(--bg-3);border:1px solid var(--line-2);color:var(--ink-2);transition:.15s;}
+.icon-btn:active{border-color:var(--amber-line);background:var(--bg-4);}
+.icon-btn svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8;}
+.fab{position:fixed;right:calc(50% - 340px + 18px);bottom:calc(var(--nav-h) + 18px + env(safe-area-inset-bottom));z-index:55;
+  width:56px;height:56px;border-radius:50%;background:var(--amber);color:#241a0c;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 10px 26px -6px rgba(215,169,75,.6);transition:.18s var(--ease);}
+@media (max-width:716px){.fab{right:18px;}}
+.fab:active{transform:scale(.92);}
+.fab svg{width:26px;height:26px;stroke:#241a0c;stroke-width:2.4;fill:none;}
+
+/* ---------- sheet / modal ---------- */
+.scrim{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);animation:fade .2s;}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:61;max-width:680px;margin:0 auto;
+  background:var(--bg-2);border-top-left-radius:var(--radius-lg);border-top-right-radius:var(--radius-lg);
+  border-top:1px solid var(--line-2);box-shadow:var(--shadow-lg);
+  max-height:92vh;overflow-y:auto;animation:slideup .32s var(--ease);
+  padding:8px 18px calc(24px + env(safe-area-inset-bottom));}
+@keyframes slideup{from{transform:translateY(100%);}to{transform:none;}}
+.sheet-grip{width:38px;height:4px;border-radius:999px;background:var(--line-2);margin:8px auto 14px;}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;}
+.sheet-title{font-size:21px;margin-bottom:0;}
+.sheet-x{flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:var(--bg-3);border:1px solid var(--line-2);
+  display:flex;align-items:center;justify-content:center;color:var(--ink-2);}
+.sheet-x:active{background:var(--bg-4);}
+.sheet-x svg{width:18px;height:18px;stroke:currentColor;stroke-width:2;fill:none;}
+
+/* ---------- auth ---------- */
+.auth-wrap{max-width:420px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:24px 22px calc(24px + env(safe-area-inset-bottom));}
+.auth-brand{text-align:center;margin-bottom:26px;}
+.auth-brand .mark{font-family:'Fraunces';font-size:40px;font-weight:700;letter-spacing:-.02em;}
+.auth-brand .mark span{color:var(--amber);}
+.auth-brand .tag{color:var(--ink-3);font-size:13.5px;margin-top:6px;}
+.auth-msg{font-size:13px;padding:10px 12px;border-radius:var(--radius-sm);margin-bottom:14px;line-height:1.45;}
+.auth-msg.err{background:#d1735c1a;border:1px solid #d1735c55;color:#e6a08d;}
+.auth-msg.ok{background:#7fb08a1a;border:1px solid #7fb08a55;color:#a7cbad;}
+.auth-switch{text-align:center;margin-top:16px;font-size:13.5px;color:var(--ink-3);}
+.auth-switch button{color:var(--amber);font-weight:600;}
+
+/* ---------- misc ---------- */
+.divider{height:1px;background:var(--line-2);margin:18px 0;}
+.hint{font-size:12.5px;color:var(--ink-3);line-height:1.5;margin-top:6px;}
+.danger-text{color:var(--red);}
+.center{text-align:center;}
+.spin{width:20px;height:20px;border:2px solid var(--amber-line);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.spin-lg{width:34px;height:34px;border-width:3px;margin:60px auto;}
+.log{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#0e1512;border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px;max-height:320px;overflow:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word;}
+.log .tag{color:var(--amber-2);}
+.log .err{color:var(--red);}
+.log .t{color:var(--ink-3);}
+.toast{position:fixed;bottom:calc(var(--nav-h) + 24px);left:50%;transform:translateX(-50%);z-index:90;
+  background:var(--bg-4);border:1px solid var(--line-2);color:var(--ink);padding:9px 18px;border-radius:999px;font-size:13.5px;font-weight:500;box-shadow:var(--shadow-lg);animation:fade .2s;max-width:90%;}
+.update-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:var(--amber);color:#241a0c;border:none;text-align:left;padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;font-size:13.5px;font-weight:600;}
+.update-go{flex:0 0 auto;background:#241a0c;color:var(--amber);border-radius:999px;padding:6px 15px;font-weight:800;font-size:12.5px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ============================================================
+   LOGGING - module-level ring buffer, ASCII-only bracketed tags.
+   iPhone has no console, so Settings -> Diagnostics renders this.
+   ============================================================ */
+const LOG_CAP = 600;
+const LOG = [];
+// User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
+// prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
+const APP_VERSION = "0.1.0";
+// Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
+const BUILD = "2026-07-10.1";
+// True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
+function buildIsNewer(a, b){
+  const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
+  const pa=parse(a), pb=parse(b), len=Math.max(pa.length,pb.length);
+  for(let i=0;i<len;i++){ const x=pa[i]||0, y=pb[i]||0; if(x>y) return true; if(x<y) return false; }
+  return false;
+}
+function log(tag, msg){
+  const line = { t: new Date().toISOString().slice(11,19), tag, msg: String(msg) };
+  LOG.push(line);
+  if (LOG.length > LOG_CAP) LOG.shift();
+  try { console.log("[" + tag + "] " + line.msg); } catch(e){}
+}
+log("INIT", "HomeCaptain booting - v"+APP_VERSION+" (build "+BUILD+")");
+
+/* ============================================================
+   SMALL UTILITIES
+   ============================================================ */
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const nowISO = () => new Date().toISOString();
+function fmtDate(iso){
+  if(!iso) return "";
+  const d = new Date(iso + (iso.length<=10 ? "T00:00:00" : ""));
+  if(isNaN(d)) return "";
+  return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
+}
+
+/* ============================================================
+   LOCAL STORAGE LAYER (namespaced "homecaptain:")
+   Offline cache; the backend + Supabase are the source of truth at rest.
+   NAMES ARE FOREVER - do not rename this namespace after launch.
+   ============================================================ */
+const NS = "homecaptain:";
+const lsGet = (k, fb) => { try { const v = localStorage.getItem(NS+k); return v===null ? fb : JSON.parse(v); } catch(e){ log("ERROR","lsGet "+k+": "+e.message); return fb; } };
+const lsSet = (k, v) => { try { localStorage.setItem(NS+k, JSON.stringify(v)); } catch(e){ log("ERROR","lsSet "+k+": "+e.message); } };
+const lsDel = (k) => { try { localStorage.removeItem(NS+k); } catch(e){} };
+
+// One per-record JSONB collection per entity (mirrors the backend COLLECTIONS).
+const FILES = ["homes","events","documents","reminders"];
+
+/* ============================================================
+   BACKEND + AUTH CONFIG
+   All three values are PUBLIC-SAFE and intentionally shipped in the browser:
+   the Supabase anon key only permits auth (not data access - data goes through
+   our backend), and the API base is just a URL. The real secrets (service-role
+   key, Anthropic key) live ONLY on the Railway backend, never here.
+   ============================================================ */
+const SUPABASE_URL = "https://rlgqrdqcealawneibcwa.supabase.co";
+// TODO: paste the Supabase anon / publishable key here (Settings > API Keys >
+// anon public). It is public-safe. Until it is set, sign-in will not work.
+const SUPABASE_ANON_KEY = "REPLACE_WITH_SUPABASE_ANON_KEY";
+const API_BASE = "https://web-production-cd84d.up.railway.app";
+
+// Supabase client - AUTH ONLY (login, session, token refresh). Data + AI never
+// touch it; they go through our backend with the user's access token.
+const supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, storage: window.localStorage, storageKey: "homecaptain-auth" }
+});
+
+async function authToken(){
+  try{ const { data } = await supa.auth.getSession(); return data.session ? data.session.access_token : null; }
+  catch(e){ log("ERROR","authToken: "+e.message); return null; }
+}
+
+/* ============================================================
+   BACKEND COLLECTIONS API
+   GET  /api/collection/<name> -> the whole array
+   PUT  /api/collection/<name> -> replace the whole array
+   `meta` is a per-user singleton OBJECT, so it gets its own load/save.
+   ============================================================ */
+async function collGet(file){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/collection/" + file, { headers: { "Authorization":"Bearer "+token } });
+  if(!r.ok){ const t=await r.text(); log("ERROR","GET "+file+" "+r.status+" "+t.slice(0,140));
+    if(r.status===401) throw new Error("Session expired - sign in again.");
+    throw new Error("Load failed ("+r.status+")"); }
+  const j = await r.json();
+  const arr = Array.isArray(j) ? j : [];
+  log("API","GET "+file+" ok ("+arr.length+" rows)");
+  return arr;
+}
+async function collPut(file, data){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/collection/" + file, {
+    method:"PUT",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify(data)
+  });
+  if(!r.ok){ const t=await r.text(); log("ERROR","PUT "+file+" "+r.status+" "+t.slice(0,140));
+    if(r.status===401) throw new Error("Session expired - sign in again.");
+    throw new Error("Save failed ("+r.status+")"); }
+  log("API","PUT "+file+" ok ("+data.length+" rows)");
+  return true;
+}
+async function metaGet(){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/collection/meta", { headers:{ "Authorization":"Bearer "+token } });
+  if(!r.ok){ if(r.status===401) throw new Error("Session expired - sign in again."); throw new Error("Load failed ("+r.status+")"); }
+  const j = await r.json();
+  return (j && typeof j==="object" && !Array.isArray(j)) ? j : {};
+}
+async function metaPut(obj){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/collection/meta", {
+    method:"PUT",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify(obj)
+  });
+  if(!r.ok){ if(r.status===401) throw new Error("Session expired - sign in again."); throw new Error("Save failed ("+r.status+")"); }
+  return true;
+}
+
+/* ============================================================
+   PHOTO / DOCUMENT STORAGE (backend-relayed; private bucket).
+   Thin wrappers over /api/photos - used by events + the bill scanner later.
+   ============================================================ */
+async function uploadFile(path, base64){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/photos", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ path, image_base64: base64 })
+  });
+  if(!r.ok){ const t=await r.text(); throw new Error("Upload failed ("+r.status+") "+t.slice(0,120)); }
+  return (await r.json()).path;
+}
+async function signFile(path){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/photos?path=" + encodeURIComponent(path), { headers:{ "Authorization":"Bearer "+token } });
+  if(!r.ok) throw new Error("Sign failed ("+r.status+")");
+  return (await r.json()).url;
+}
+
+/* ============================================================
+   AI RELAY (backend-metered). Task label routes the model server-side.
+   Used later for: ocr_bill, summarize_home, categorize_expense, explain_repair.
+   ============================================================ */
+async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in.");
+  const r = await fetch(API_BASE + "/api/ai/relay",{
+    method:"POST",
+    headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+    body: JSON.stringify({ task, model:"claude-sonnet-5", max_tokens:maxTokens, system, messages })
+  });
+  if(!r.ok){
+    if(r.status===401) throw new Error("Session expired - sign in again.");
+    if(r.status===402 || r.status===429) throw new Error("AI is at its limit for now. Try again later.");
+    if(r.status===503) throw new Error("AI is temporarily unavailable.");
+    throw new Error("AI error "+r.status+".");
+  }
+  const j = await r.json();
+  return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+}
+
+/* ============================================================
+   DOMAIN CONSTANTS
+   ============================================================ */
+const HOME_TYPES = ["House","Condo","Townhome","Apartment","Rental","Cabin","Other"];
+const DEFAULT_CFG = { appName:"HomeCaptain", activeHomeId:null };
+
+/* ============================================================
+   DATA STORE HOOK
+   Holds all entities in memory + localStorage. Optimistic local writes, then
+   push each changed collection to the backend. Dirty collections retry on the
+   next sign-in / when the device comes back online.
+   ============================================================ */
+function useStore(){
+  const [cfg, setCfg] = useState(() => lsGet("cfg", DEFAULT_CFG));
+  const [data, setData] = useState(() => {
+    const d = {}; FILES.forEach(f => d[f] = lsGet("cache:"+f, [])); return d;
+  });
+  const [dirty, setDirty] = useState(() => lsGet("dirty", {}));
+  const [sync, setSync] = useState("idle");       // idle | busy | pending | error
+  const [syncMsg, setSyncMsg] = useState("");
+  const [online, setOnline] = useState(navigator.onLine);
+  const [authed, setAuthed] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authReady, setAuthReady] = useState(false);
+
+  const dataRef = useRef(data); dataRef.current = data;
+  const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
+  const cfgRef = useRef(cfg); cfgRef.current = cfg;
+  const cfgDirtyRef = useRef(lsGet("cfgDirty", false));
+  const authedRef = useRef(false);
+
+  const setDirtyFlag = useCallback((file, on) => {
+    setDirty(prev => { const next = {...prev}; if(on) next[file]=true; else delete next[file]; lsSet("dirty", next); return next; });
+  }, []);
+
+  // Push one collection to the backend. Leaves its dirty flag set on failure so
+  // the next flush retries it.
+  const pushFile = useCallback(async (file) => {
+    if(!authedRef.current) return;
+    if(!navigator.onLine){ setSync("pending"); return; }
+    try{
+      setSync("busy");
+      await collPut(file, dataRef.current[file] || []);
+      setDirtyFlag(file, false);
+      setSync("idle");
+    }catch(e){ setSync("error"); setSyncMsg(e.message||"Sync failed"); log("ERROR","pushFile "+file+": "+e.message); }
+  }, [setDirtyFlag]);
+
+  const pushCfg = useCallback(async () => {
+    if(!cfgDirtyRef.current || !authedRef.current) return;
+    if(!navigator.onLine){ setSync("pending"); return; }
+    try{ await metaPut({ cfg: cfgRef.current }); cfgDirtyRef.current=false; lsSet("cfgDirty", false); }
+    catch(e){ setSync("error"); setSyncMsg(e.message||"Sync failed"); log("ERROR","pushCfg: "+e.message); }
+  }, []);
+
+  // Pull everything from the backend into the local cache (first login / manual).
+  const pullAll = useCallback(async () => {
+    if(!authedRef.current) return;
+    setSync("busy");
+    try{
+      const next = {};
+      for(const f of FILES){ next[f] = await collGet(f); lsSet("cache:"+f, next[f]); }
+      setData(next); dataRef.current = next;
+      const m = await metaGet();
+      if(m && m.cfg && typeof m.cfg==="object"){
+        const merged = {...DEFAULT_CFG, ...m.cfg};
+        setCfg(merged); lsSet("cfg", merged); cfgRef.current = merged;
+      }
+      setSync("idle"); setSyncMsg("");
+      log("SYNC","pullAll complete");
+    }catch(e){ setSync("error"); setSyncMsg(e.message||"Load failed"); log("ERROR","pullAll: "+e.message); }
+  }, []);
+
+  // Flush any dirty collections + config (called on online + after sign-in).
+  const flush = useCallback(async () => {
+    if(!authedRef.current || !navigator.onLine) return;
+    for(const f of Object.keys(dirtyRef.current)){ await pushFile(f); }
+    await pushCfg();
+  }, [pushFile, pushCfg]);
+
+  // Mutate a collection: optimistic local write + persist + push.
+  const saveCollection = useCallback((file, items) => {
+    setData(prev => { const next = {...prev, [file]: items}; dataRef.current = next; return next; });
+    lsSet("cache:"+file, items);
+    setDirtyFlag(file, true);
+    pushFile(file);
+  }, [pushFile, setDirtyFlag]);
+
+  const saveCfg = useCallback((next) => {
+    setCfg(next); lsSet("cfg", next); cfgRef.current = next;
+    cfgDirtyRef.current = true; lsSet("cfgDirty", true);
+    pushCfg();
+  }, [pushCfg]);
+
+  // ---- auth session wiring ----
+  useEffect(() => {
+    let mounted = true;
+    supa.auth.getSession().then(({ data }) => {
+      if(!mounted) return;
+      const s = data.session;
+      authedRef.current = !!s;
+      setAuthed(!!s); setAuthEmail(s ? (s.user.email||"") : ""); setAuthReady(true);
+      if(s){ pullAll(); }
+    });
+    const { data: sub } = supa.auth.onAuthStateChange((_e, session) => {
+      authedRef.current = !!session;
+      setAuthed(!!session); setAuthEmail(session ? (session.user.email||"") : "");
+      if(session){ pullAll(); }
+      else {
+        // Sign-out: wipe local cache so a shared device doesn't leak data.
+        FILES.forEach(f => { lsDel("cache:"+f); });
+        lsDel("dirty"); lsDel("cfg"); lsDel("cfgDirty");
+        const blank = {}; FILES.forEach(f => blank[f]=[]);
+        setData(blank); dataRef.current = blank;
+        setDirty({}); dirtyRef.current = {};
+        setCfg(DEFAULT_CFG); cfgRef.current = DEFAULT_CFG;
+      }
+    });
+    return () => { mounted = false; sub.subscription.unsubscribe(); };
+  }, [pullAll]);
+
+  // ---- online/offline flush ----
+  useEffect(() => {
+    const goOnline = () => { setOnline(true); flush(); };
+    const goOffline = () => { setOnline(false); setSync("pending"); };
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, [flush]);
+
+  return { data, cfg, sync, syncMsg, online, authed, authEmail, authReady,
+           saveCollection, saveCfg, pullAll, flush };
+}
+
+/* ============================================================
+   ICONS (inline feather-style)
+   ============================================================ */
+const Icon = ({d, size}) => (
+  <svg viewBox="0 0 24 24" width={size||22} height={size||22} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    {d.map((p,i)=><path key={i} d={p}/>)}
+  </svg>
+);
+const ICONS = {
+  home:    ["M3 11l9-8 9 8","M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10"],
+  log:     ["M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2","M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2","M9 12h6","M9 16h6"],
+  doc:     ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z","M14 2v6h6","M9 13h6","M9 17h4"],
+  bell:    ["M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9","M13.7 21a2 2 0 0 1-3.4 0"],
+  gear:    ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z","M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"],
+  plus:    ["M12 5v14","M5 12h14"],
+  x:       ["M18 6L6 18","M6 6l12 12"],
+  back:    ["M19 12H5","M12 19l-7-7 7-7"],
+  refresh: ["M23 4v6h-6","M1 20v-6h6","M3.51 9a9 9 0 0 1 14.85-3.36L23 10","M1 14l4.64 4.36A9 9 0 0 0 20.49 15"],
+};
+
+/* ============================================================
+   AUTH SCREEN
+   ============================================================ */
+function AuthScreen(){
+  const [mode, setMode] = useState("in");     // in | up
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+  const [pending, setPending] = useState("");  // email awaiting confirmation
+
+  const configured = SUPABASE_ANON_KEY && SUPABASE_ANON_KEY !== "REPLACE_WITH_SUPABASE_ANON_KEY";
+
+  const submit = async () => {
+    setErr(""); setOk("");
+    if(!email.trim() || !pw){ setErr("Enter your email and password."); return; }
+    setBusy(true);
+    try{
+      if(mode==="up"){
+        const { error } = await supa.auth.signUp({ email: email.trim(), password: pw });
+        if(error) throw error;
+        setPending(email.trim());
+        setOk("Check your inbox to confirm your email, then sign in.");
+        setMode("in");
+      } else {
+        const { error } = await supa.auth.signInWithPassword({ email: email.trim(), password: pw });
+        if(error) throw error;
+        // onAuthStateChange takes over from here.
+      }
+    }catch(e){
+      let m = e.message || "Something went wrong.";
+      if(pending && email.trim()===pending && /invalid/i.test(m)) m = "Confirm your email first - check your inbox.";
+      else if(/only request this after/i.test(m)) m = "We just sent your confirmation email - try again in a minute.";
+      setErr(m); log("ERROR","auth: "+(e.message||m));
+    }finally{ setBusy(false); }
+  };
+
+  return (
+    <div className="auth-wrap">
+      <div className="auth-brand">
+        <div className="mark">Home<span>Captain</span></div>
+        <div className="tag">Your household logbook, documents, and reminders.</div>
+      </div>
+      {!configured &&
+        <div className="auth-msg err">Backend not fully configured yet: the Supabase anon key still needs to be set in this build.</div>}
+      {err && <div className="auth-msg err">{err}</div>}
+      {ok && <div className="auth-msg ok">{ok}</div>}
+      <div className="field">
+        <label className="label">Email</label>
+        <input className="input" type="email" autoComplete="email" value={email}
+          onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" />
+      </div>
+      <div className="field">
+        <label className="label">Password</label>
+        <input className="input" type="password" autoComplete={mode==="up"?"new-password":"current-password"}
+          value={pw} onChange={e=>setPw(e.target.value)} placeholder="********" />
+      </div>
+      <button className="btn btn-primary btn-block" disabled={busy || !configured} onClick={submit}>
+        {busy ? <span className="spin"></span> : (mode==="up" ? "Create account" : "Sign in")}
+      </button>
+      <div className="auth-switch">
+        {mode==="up" ? "Already have an account? " : "New here? "}
+        <button onClick={()=>{ setMode(mode==="up"?"in":"up"); setErr(""); setOk(""); }}>
+          {mode==="up" ? "Sign in" : "Create one"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   HOME EDITOR SHEET
+   ============================================================ */
+function HomeSheet({ home, onSave, onDelete, onClose }){
+  const [name, setName] = useState(home ? home.name : "");
+  const [address, setAddress] = useState(home ? (home.address||"") : "");
+  const [type, setType] = useState(home ? (home.type||"House") : "House");
+  const [purchaseDate, setPurchaseDate] = useState(home ? (home.purchaseDate||"") : "");
+  const [notes, setNotes] = useState(home ? (home.notes||"") : "");
+
+  const save = () => {
+    if(!name.trim()){ return; }
+    const rec = {
+      id: home ? home.id : uid(),
+      name: name.trim(), address: address.trim(), type,
+      purchaseDate: purchaseDate || "", notes: notes.trim(),
+      createdAt: home ? home.createdAt : nowISO(),
+      updatedAt: nowISO(),
+    };
+    onSave(rec);
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{home ? "Edit home" : "Add a home"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <div className="title-field">
+          <label className="label">Name</label>
+          <input className="title-input" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. The Oak Street house" autoFocus />
+        </div>
+        <div className="field">
+          <label className="label">Address</label>
+          <input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Street, city, state" />
+        </div>
+        <div className="row">
+          <div className="field">
+            <label className="label">Type</label>
+            <select className="select" value={type} onChange={e=>setType(e.target.value)}>
+              {HOME_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label className="label">Purchased</label>
+            <input className="input" type="date" value={purchaseDate} onChange={e=>setPurchaseDate(e.target.value)} />
+          </div>
+        </div>
+        <div className="field">
+          <label className="label">Notes</label>
+          <textarea className="textarea" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Anything worth remembering about this property." />
+        </div>
+        <button className="btn btn-primary btn-block" onClick={save} disabled={!name.trim()}>
+          {home ? "Save changes" : "Add home"}
+        </button>
+        {home &&
+          <button className="btn btn-danger btn-block" style={{marginTop:10}}
+            onClick={()=>{ if(confirm("Delete this home and everything scoped to it stays but loses its link. Continue?")) onDelete(home.id); }}>
+            Delete home
+          </button>}
+      </div>
+    </>
+  );
+}
+
+/* ============================================================
+   SCREENS
+   ============================================================ */
+function HomesScreen({ store, onAdd, onEdit }){
+  const homes = store.data.homes || [];
+  if(!homes.length){
+    return (
+      <div className="empty">
+        <div className="glyph">HC</div>
+        <h3 className="title-sm">Add your first home</h3>
+        <p>Everything in HomeCaptain - repairs, bills, documents, reminders - is organized by property.</p>
+        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+          <Icon d={ICONS.plus} size={16}/> Add a home
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="list">
+      {homes.map(h => (
+        <button key={h.id} className="item" onClick={()=>onEdit(h)}>
+          <div className="item-body">
+            <div className="item-title">{h.name}</div>
+            <div className="item-meta">
+              {h.type && <span className="chip">{h.type}</span>}
+              {h.address && <span className="chip">{h.address}</span>}
+              {h.purchaseDate && <span className="chip">Since {fmtDate(h.purchaseDate)}</span>}
+            </div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ComingSoon({ title, blurb, glyph }){
+  return (
+    <div className="empty">
+      <div className="glyph">{glyph}</div>
+      <h3 className="title-sm">{title}</h3>
+      <p>{blurb}</p>
+    </div>
+  );
+}
+
+function SettingsScreen({ store, onCheckUpdate, updateState }){
+  const [showLog, setShowLog] = useState(false);
+  return (
+    <div>
+      <div className="set-group">Account</div>
+      <div className="card">
+        <div className="subtle" style={{marginBottom:10}}>{store.authEmail || "Signed in"}</div>
+        <button className="btn btn-ghost btn-block" onClick={()=>supa.auth.signOut()}>Sign out</button>
+      </div>
+
+      <div className="set-group">About</div>
+      <div className="card">
+        <div className="updrow">
+          <span className="subtle">HomeCaptain v{APP_VERSION} (build {BUILD})</span>
+        </div>
+        <div className="updrow" style={{marginTop:8}}>
+          {updateState==="checking"
+            ? <span className="spin"></span>
+            : <button className="btn btn-ghost btn-sm" onClick={onCheckUpdate}><Icon d={ICONS.refresh} size={14}/> Check for updates</button>}
+          {updateState==="current" && <span className="subtle">You are up to date.</span>}
+          {updateState==="error" && <span className="subtle danger-text">Could not check.</span>}
+        </div>
+      </div>
+
+      <div className="set-group">Diagnostics</div>
+      <div className="card">
+        <button className="btn btn-ghost btn-block" onClick={()=>setShowLog(s=>!s)}>{showLog ? "Hide" : "Show"} log</button>
+        {showLog &&
+          <div className="log" style={{marginTop:12}}>
+            {LOG.slice(-120).map((l,i)=>(
+              <div key={i} className={l.tag==="ERROR"?"err":""}>
+                <span className="t">{l.t} </span><span className="tag">[{l.tag}]</span> {l.msg}
+              </div>
+            ))}
+          </div>}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   APP SHELL
+   ============================================================ */
+const TABS = [
+  { key:"homes", label:"Homes", icon:ICONS.home },
+  { key:"log",   label:"Log",   icon:ICONS.log },
+  { key:"docs",  label:"Docs",  icon:ICONS.doc },
+  { key:"remind",label:"Reminders", icon:ICONS.bell },
+];
+
+function App(){
+  const store = useStore();
+  const [tab, setTab] = useState("homes");
+  const [sheet, setSheet] = useState(null);   // null | {home} | {home:existing}
+  const [inSettings, setInSettings] = useState(false);
+  const [toast, setToast] = useState("");
+  const [update, setUpdate] = useState({ state:"", available:false });
+
+  const showToast = (m) => { setToast(m); setTimeout(()=>setToast(""), 2200); };
+
+  // PWA self-update: fetch the deployed index.html (no-store), regex the build,
+  // compare with buildIsNewer. Bump BUILD on every deploy or this never fires.
+  const checkUpdate = useCallback(async () => {
+    setUpdate(u => ({...u, state:"checking"}));
+    try{
+      const r = await fetch(location.pathname + "?_=" + Date.now(), { cache:"no-store" });
+      const html = await r.text();
+      const m = html.match(/const BUILD = "([^"]+)"/);
+      const remote = m ? m[1] : null;
+      if(remote && buildIsNewer(remote, BUILD)){ setUpdate({ state:"", available:true }); }
+      else { setUpdate({ state:"current", available:false }); }
+    }catch(e){ setUpdate({ state:"error", available:false }); log("ERROR","checkUpdate: "+e.message); }
+  }, []);
+  useEffect(() => { const t = setTimeout(checkUpdate, 4000); return () => clearTimeout(t); }, [checkUpdate]);
+
+  // ---- home CRUD handlers ----
+  const saveHome = (rec) => {
+    const homes = store.data.homes || [];
+    const exists = homes.some(h => h.id === rec.id);
+    const next = exists ? homes.map(h => h.id===rec.id ? rec : h) : [rec, ...homes];
+    store.saveCollection("homes", next);
+    if(!store.cfg.activeHomeId || !exists) store.saveCfg({ ...store.cfg, activeHomeId: rec.id });
+    setSheet(null);
+    showToast(exists ? "Home updated" : "Home added");
+  };
+  const deleteHome = (id) => {
+    const next = (store.data.homes||[]).filter(h => h.id !== id);
+    store.saveCollection("homes", next);
+    if(store.cfg.activeHomeId === id) store.saveCfg({ ...store.cfg, activeHomeId: next[0] ? next[0].id : null });
+    setSheet(null);
+    showToast("Home deleted");
+  };
+
+  if(!store.authReady){
+    return <div className="app"><div className="spin spin-lg"></div></div>;
+  }
+  if(!store.authed){
+    return <AuthScreen />;
+  }
+
+  const activeHome = (store.data.homes||[]).find(h => h.id === store.cfg.activeHomeId) || (store.data.homes||[])[0] || null;
+
+  return (
+    <div className="app">
+      {update.available &&
+        <button className="update-bar" onClick={()=>location.reload(true)}>
+          <span>A new version of HomeCaptain is ready.</span>
+          <span className="update-go">Update</span>
+        </button>}
+
+      <div className="topbar">
+        <div className="topbar-row">
+          <div>
+            <div className="eyebrow">{inSettings ? "Settings" : (activeHome ? activeHome.name : "HomeCaptain")}</div>
+            <h1 className="title">{inSettings ? "Settings" : TABS.find(t=>t.key===tab).label}</h1>
+          </div>
+          <button className="icon-btn" onClick={()=>setInSettings(s=>!s)} aria-label="Settings">
+            <Icon d={inSettings ? ICONS.back : ICONS.gear} size={21}/>
+          </button>
+        </div>
+        <div className={"sync "+store.sync}>
+          <span className="dot"></span>
+          {store.sync==="idle" && "All changes saved"}
+          {store.sync==="busy" && "Syncing..."}
+          {store.sync==="pending" && "Offline - will sync"}
+          {store.sync==="error" && (store.syncMsg || "Sync error")}
+        </div>
+      </div>
+
+      <div className="screen">
+        {inSettings
+          ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={update.state} />
+          : <>
+              {tab==="homes" && <HomesScreen store={store} onAdd={()=>setSheet({home:null})} onEdit={(h)=>setSheet({home:h})} />}
+              {tab==="log" && (activeHome
+                ? <ComingSoon glyph="+" title="Repair & maintenance log" blurb={"Log repairs, maintenance, improvements, and inspections for "+activeHome.name+". Coming next."} />
+                : <ComingSoon glyph="HC" title="Add a home first" blurb="The log is organized by property. Add a home to start." />)}
+              {tab==="docs" && (activeHome
+                ? <ComingSoon glyph="[]" title="Bills & documents" blurb="Scan a bill or store warranties, manuals, and receipts. Coming next." />
+                : <ComingSoon glyph="HC" title="Add a home first" blurb="Documents are organized by property. Add a home to start." />)}
+              {tab==="remind" && (activeHome
+                ? <ComingSoon glyph="!" title="Maintenance reminders" blurb="Recurring and seasonal reminders so nothing at the house slips. Coming next." />
+                : <ComingSoon glyph="HC" title="Add a home first" blurb="Reminders are organized by property. Add a home to start." />)}
+            </>}
+      </div>
+
+      {!inSettings && tab==="homes" &&
+        <button className="fab" onClick={()=>setSheet({home:null})} aria-label="Add home"><Icon d={ICONS.plus} size={26}/></button>}
+
+      {!inSettings &&
+        <nav className="nav">
+          {TABS.map(t => (
+            <button key={t.key} className={"nav-btn "+(tab===t.key?"on":"")} onClick={()=>setTab(t.key)}>
+              <Icon d={t.icon} size={22}/>
+              {t.label}
+            </button>
+          ))}
+        </nav>}
+
+      {sheet &&
+        <HomeSheet home={sheet.home} onSave={saveHome} onDelete={deleteHome} onClose={()=>setSheet(null)} />}
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
