@@ -275,9 +275,9 @@ const FILES = ["homes","events","documents","reminders"];
    key, Anthropic key) live ONLY on the Railway backend, never here.
    ============================================================ */
 const SUPABASE_URL = "https://rlgqrdqcealawneibcwa.supabase.co";
-// TODO: paste the Supabase anon / publishable key here (Settings > API Keys >
-// anon public). It is public-safe. Until it is set, sign-in will not work.
-const SUPABASE_ANON_KEY = "REPLACE_WITH_SUPABASE_ANON_KEY";
+// Supabase anon / publishable key (Settings > API Keys > anon public). This is
+// PUBLIC-SAFE by design - it only permits auth, never data access.
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJsZ3FyZHFjZWFsYXduZWliY3dhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MjE3ODIsImV4cCI6MjA5OTI5Nzc4Mn0.dk1mkPOpyYSyRoqr-b3nTl5s6d3kebp5nN2Bc1qGCJ4";
 const API_BASE = "https://web-production-cd84d.up.railway.app";
 
 // Supabase client - AUTH ONLY (login, session, token refresh). Data + AI never
