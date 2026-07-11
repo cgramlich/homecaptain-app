@@ -228,9 +228,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.2.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-11.1";
+const BUILD = "2026-07-11.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -406,10 +406,10 @@ async function propertyLookup(address){
     body: JSON.stringify({ address })
   });
   if(!r.ok){
-    if(r.status===503) throw new Error("Address lookup isn't set up yet.");
-    if(r.status===429) throw new Error("Address lookups are at this month's limit.");
-    if(r.status===400){ const t=await r.json().catch(()=>({})); throw new Error(t.detail || "Enter a fuller address."); }
-    throw new Error("Lookup failed ("+r.status+").");
+    const t = await r.json().catch(()=>({}));
+    if(r.status===503) throw new Error(t.detail || "Address lookup isn't set up yet.");
+    if(r.status===429) throw new Error(t.detail || "Address lookups are at this month's limit.");
+    throw new Error(t.detail || ("Lookup failed ("+r.status+")."));
   }
   return (await r.json()).property;   // normalized fields, or null if no record
 }
