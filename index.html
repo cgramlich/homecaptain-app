@@ -123,6 +123,10 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%238ba095' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:34px;}
 .row{display:flex;gap:10px;}
 .row>*{flex:1;}
+/* smart add-a-home assist */
+.assist-toggle{display:inline-block;margin-top:8px;background:none;border:none;color:var(--amber);font-size:12.5px;font-weight:600;padding:2px 0;cursor:pointer;}
+.assist-msg{margin-top:8px;font-size:12.5px;color:var(--ink-2);background:var(--amber-dim);border:1px solid var(--amber-line);border-radius:var(--radius-sm);padding:8px 10px;line-height:1.45;}
+.facts{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 16px;}
 
 /* buttons */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 18px;border-radius:var(--radius-sm);
@@ -224,9 +228,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.2.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-10.1";
+const BUILD = "2026-07-11.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -387,6 +391,64 @@ async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
   const j = await r.json();
   return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
 }
+function stripFences(s){ return String(s).replace(/```json/gi,"").replace(/```/g,"").trim(); }
+
+/* ============================================================
+   SMART ADD-A-HOME - Rentcast address lookup + AI listing parse.
+   Both prefill the Add-a-home form; the user reviews before saving.
+   ============================================================ */
+async function propertyLookup(address){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in.");
+  const r = await fetch(API_BASE + "/api/property/lookup", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+    body: JSON.stringify({ address })
+  });
+  if(!r.ok){
+    if(r.status===503) throw new Error("Address lookup isn't set up yet.");
+    if(r.status===429) throw new Error("Address lookups are at this month's limit.");
+    if(r.status===400){ const t=await r.json().catch(()=>({})); throw new Error(t.detail || "Enter a fuller address."); }
+    throw new Error("Lookup failed ("+r.status+").");
+  }
+  return (await r.json()).property;   // normalized fields, or null if no record
+}
+
+const LISTING_SYSTEM =
+  "You extract home facts from a real-estate listing the user pasted. Return ONLY a "+
+  "JSON object (no prose, no markdown fences) with any of these keys you can find "+
+  "(omit the ones you can't): "+
+  '{"name": short nickname for the home (e.g. the street name), '+
+  '"address": full street address, '+
+  '"type": one of ["House","Condo","Townhome","Apartment","Rental","Cabin","Other"], '+
+  '"bedrooms": number, "bathrooms": number, "squareFootage": number, '+
+  '"lotSize": number in sq ft, "yearBuilt": number, "lastSalePrice": number, '+
+  '"purchaseDate": "YYYY-MM-DD" if a sale/close date is present, '+
+  '"notes": a one-line summary of standout features}. '+
+  "All numbers must be plain numbers with no units, commas, or dollar signs.";
+
+async function parseListing(text){
+  const out = await aiRelay("parse_listing",
+    [{ role:"user", content: String(text).slice(0, 8000) }],
+    { system: LISTING_SYSTEM, maxTokens: 1024 });
+  let obj;
+  try { obj = JSON.parse(stripFences(out)); }
+  catch(e){ log("ERROR","parseListing JSON: "+e.message); throw new Error("Couldn't read that listing. Try pasting the full details."); }
+  return (obj && typeof obj==="object" && !Array.isArray(obj)) ? obj : {};
+}
+
+// Rentcast propertyType -> our HOME_TYPES.
+function mapPropertyType(pt){
+  if(!pt) return null;
+  const s = String(pt).toLowerCase();
+  if(s.includes("single")) return "House";
+  if(s.includes("condo")) return "Condo";
+  if(s.includes("town")) return "Townhome";
+  if(s.includes("apartment") || s.includes("multi")) return "Apartment";
+  if(s.includes("cabin")) return "Cabin";
+  return "Other";
+}
+function fmtNum(n){ const x = Number(n); return isNaN(x) ? String(n) : x.toLocaleString(); }
 
 /* ============================================================
    DOMAIN CONSTANTS
@@ -622,18 +684,74 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
   const [type, setType] = useState(home ? (home.type||"House") : "House");
   const [purchaseDate, setPurchaseDate] = useState(home ? (home.purchaseDate||"") : "");
   const [notes, setNotes] = useState(home ? (home.notes||"") : "");
+  const [facts, setFacts] = useState(home && home.facts ? home.facts : {});
+  const [listing, setListing] = useState("");
+  const [showListing, setShowListing] = useState(false);
+  const [busy, setBusy] = useState("");        // "" | "lookup" | "listing"
+  const [assist, setAssist] = useState("");
+
+  const setFact = (patch) => setFacts(f => ({ ...f, ...patch }));
+
+  const applyProperty = (p) => {
+    if(!p){ setAssist("No public record found for that address - enter the details manually."); return; }
+    if(p.formattedAddress) setAddress(p.formattedAddress);
+    const mapped = mapPropertyType(p.propertyType);
+    if(mapped) setType(mapped);
+    if(!purchaseDate && p.lastSaleDate) setPurchaseDate(String(p.lastSaleDate).slice(0,10));
+    if(!name.trim() && p.formattedAddress) setName(p.formattedAddress.split(",")[0]);
+    setFact({ bedrooms:p.bedrooms, bathrooms:p.bathrooms, squareFootage:p.squareFootage,
+              lotSize:p.lotSize, yearBuilt:p.yearBuilt, lastSalePrice:p.lastSalePrice,
+              lastSaleDate:p.lastSaleDate, latitude:p.latitude, longitude:p.longitude });
+    setAssist("Filled from public records - review and save.");
+  };
+
+  const handleLookup = async () => {
+    if(address.trim().length < 6){ setAssist("Enter the street, city, and state first."); return; }
+    setBusy("lookup"); setAssist("");
+    try { applyProperty(await propertyLookup(address.trim())); }
+    catch(e){ setAssist(e.message || "Lookup failed."); }
+    finally { setBusy(""); }
+  };
+
+  const applyListing = (o) => {
+    if(o.name && !name.trim()) setName(String(o.name));
+    if(o.address) setAddress(String(o.address));
+    if(o.type && HOME_TYPES.includes(o.type)) setType(o.type);
+    if(o.purchaseDate && !purchaseDate) setPurchaseDate(String(o.purchaseDate).slice(0,10));
+    if(o.notes && !notes.trim()) setNotes(String(o.notes));
+    setFact({ bedrooms:o.bedrooms, bathrooms:o.bathrooms, squareFootage:o.squareFootage,
+              lotSize:o.lotSize, yearBuilt:o.yearBuilt, lastSalePrice:o.lastSalePrice });
+    setAssist("Filled from the listing - review and save.");
+  };
+
+  const handleParse = async () => {
+    if(listing.trim().length < 20){ setAssist("Paste the listing details first."); return; }
+    setBusy("listing"); setAssist("");
+    try { applyListing(await parseListing(listing.trim())); }
+    catch(e){ setAssist(e.message || "Couldn't read the listing."); }
+    finally { setBusy(""); }
+  };
+
+  const cleanFacts = () => {
+    const f = {};
+    Object.keys(facts||{}).forEach(k => { const v = facts[k]; if(v!==null && v!==undefined && v!=="") f[k]=v; });
+    return f;
+  };
 
   const save = () => {
-    if(!name.trim()){ return; }
-    const rec = {
+    if(!name.trim()) return;
+    onSave({
       id: home ? home.id : uid(),
       name: name.trim(), address: address.trim(), type,
       purchaseDate: purchaseDate || "", notes: notes.trim(),
+      facts: cleanFacts(),
       createdAt: home ? home.createdAt : nowISO(),
       updatedAt: nowISO(),
-    };
-    onSave(rec);
+    });
   };
+
+  const cf = cleanFacts();
+  const hasFacts = Object.keys(cf).length > 0;
 
   return (
     <>
@@ -644,14 +762,44 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
           <h2 className="sheet-title">{home ? "Edit home" : "Add a home"}</h2>
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
+
         <div className="title-field">
           <label className="label">Name</label>
           <input className="title-input" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. The Oak Street house" autoFocus />
         </div>
+
         <div className="field">
           <label className="label">Address</label>
-          <input className="input" value={address} onChange={e=>setAddress(e.target.value)} placeholder="Street, city, state" />
+          <div className="row" style={{gap:8}}>
+            <input className="input" style={{flex:1,minWidth:0}} value={address} onChange={e=>setAddress(e.target.value)} placeholder="Street, city, state" />
+            <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto",width:"auto",whiteSpace:"nowrap"}} onClick={handleLookup} disabled={busy!==""}>
+              {busy==="lookup" ? <span className="spin"></span> : "Look up"}
+            </button>
+          </div>
+          <button className="assist-toggle" onClick={()=>setShowListing(s=>!s)}>
+            {showListing ? "Hide listing paste" : "...or paste a listing to auto-fill"}
+          </button>
+          {showListing &&
+            <div style={{marginTop:8}}>
+              <textarea className="textarea" value={listing} onChange={e=>setListing(e.target.value)}
+                placeholder="Paste the listing text (Zillow, Redfin, an MLS sheet, etc.)" />
+              <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={handleParse} disabled={busy!==""}>
+                {busy==="listing" ? <span className="spin"></span> : "Fill from listing"}
+              </button>
+            </div>}
+          {assist && <div className="assist-msg">{assist}</div>}
         </div>
+
+        {hasFacts &&
+          <div className="facts">
+            {cf.bedrooms!=null && <span className="chip amber">{cf.bedrooms} bd</span>}
+            {cf.bathrooms!=null && <span className="chip amber">{cf.bathrooms} ba</span>}
+            {cf.squareFootage!=null && <span className="chip amber">{fmtNum(cf.squareFootage)} sqft</span>}
+            {cf.yearBuilt!=null && <span className="chip amber">Built {cf.yearBuilt}</span>}
+            {cf.lotSize!=null && <span className="chip">{fmtNum(cf.lotSize)} sqft lot</span>}
+            {cf.lastSalePrice!=null && <span className="chip">Last sold ${fmtNum(cf.lastSalePrice)}</span>}
+          </div>}
+
         <div className="row">
           <div className="field">
             <label className="label">Type</label>
@@ -673,7 +821,7 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
         </button>
         {home &&
           <button className="btn btn-danger btn-block" style={{marginTop:10}}
-            onClick={()=>{ if(confirm("Delete this home and everything scoped to it stays but loses its link. Continue?")) onDelete(home.id); }}>
+            onClick={()=>{ if(confirm("Delete this home? Its logged items stay but lose the link to it.")) onDelete(home.id); }}>
             Delete home
           </button>}
       </div>
@@ -708,6 +856,10 @@ function HomesScreen({ store, onAdd, onEdit }){
               {h.type && <span className="chip">{h.type}</span>}
               {h.address && <span className="chip">{h.address}</span>}
               {h.purchaseDate && <span className="chip">Since {fmtDate(h.purchaseDate)}</span>}
+              {h.facts && (h.facts.bedrooms!=null || h.facts.bathrooms!=null) &&
+                <span className="chip amber">{[h.facts.bedrooms!=null?h.facts.bedrooms+" bd":null, h.facts.bathrooms!=null?h.facts.bathrooms+" ba":null].filter(Boolean).join(" · ")}</span>}
+              {h.facts && h.facts.squareFootage!=null && <span className="chip amber">{fmtNum(h.facts.squareFootage)} sqft</span>}
+              {h.facts && h.facts.yearBuilt!=null && <span className="chip">Built {h.facts.yearBuilt}</span>}
             </div>
           </div>
         </button>
