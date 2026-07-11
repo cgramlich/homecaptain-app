@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="HomeCaptain - the complete information layer for your home.">
+<title>HomeCaptain — Vision</title>
+<style>
+  :root{
+    /* light — sage-biased paper + brass */
+    --ground:#eaeeE8;
+    --surface:#f6f8f3;
+    --surface-2:#ffffff;
+    --ink:#15201b;
+    --ink-2:#3f4c45;
+    --muted:#6f7d73;
+    --line:#15201b1f;
+    --line-strong:#15201b33;
+    --evergreen:#1d4c39;
+    --brass:#9a6f1e;         /* readable on light */
+    --brass-bright:#b98a2c;
+    --grid:#15201b0d;
+    --shadow:0 1px 0 #ffffffb0, 0 18px 40px -26px #15201b40;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#101b16;
+      --surface:#16241d;
+      --surface-2:#1b2b23;
+      --ink:#edf3ee;
+      --ink-2:#c0ccc3;
+      --muted:#83978b;
+      --line:#ffffff14;
+      --line-strong:#ffffff26;
+      --evergreen:#2c6b50;
+      --brass:#d7a94b;
+      --brass-bright:#e7bf6c;
+      --grid:#ffffff0a;
+      --shadow:0 22px 48px -30px #00000090;
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#eaeee8;--surface:#f6f8f3;--surface-2:#ffffff;--ink:#15201b;--ink-2:#3f4c45;
+    --muted:#6f7d73;--line:#15201b1f;--line-strong:#15201b33;--evergreen:#1d4c39;
+    --brass:#9a6f1e;--brass-bright:#b98a2c;--grid:#15201b0d;
+    --shadow:0 1px 0 #ffffffb0, 0 18px 40px -26px #15201b40;
+  }
+  :root[data-theme="dark"]{
+    --ground:#101b16;--surface:#16241d;--surface-2:#1b2b23;--ink:#edf3ee;--ink-2:#c0ccc3;
+    --muted:#83978b;--line:#ffffff14;--line-strong:#ffffff26;--evergreen:#2c6b50;
+    --brass:#d7a94b;--brass-bright:#e7bf6c;--grid:#ffffff0a;
+    --shadow:0 22px 48px -30px #00000090;
+  }
+
+  *{box-sizing:border-box;}
+  .hc{
+    --font-display:'Iowan Old Style','Palatino Linotype','Palatino','Georgia',serif;
+    --font-body:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,sans-serif;
+    --font-mono:ui-monospace,'SF Mono','Cascadia Code','Roboto Mono',Menlo,monospace;
+    background:var(--ground);
+    color:var(--ink);
+    font-family:var(--font-body);
+    font-size:17px;
+    line-height:1.64;
+    -webkit-font-smoothing:antialiased;
+    margin:0;
+    print-color-adjust:exact;-webkit-print-color-adjust:exact;
+    /* faint blueprint grid over the whole sheet */
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size:34px 34px, 34px 34px;
+  }
+  .wrap{max-width:920px;margin:0 auto;padding:clamp(28px,6vw,72px) clamp(20px,5vw,40px) 80px;}
+
+  /* ---- shared type ---- */
+  .kicker{
+    font-family:var(--font-mono);font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--brass);font-weight:600;
+  }
+  .hc h1,.hc h2,.hc h3{font-family:var(--font-display);font-weight:600;line-height:1.08;
+    letter-spacing:-.01em;text-wrap:balance;margin:0;}
+  .lede{font-size:clamp(1.05rem,1.6vw,1.22rem);color:var(--ink-2);max-width:60ch;}
+  .rule{height:1px;background:var(--line);border:0;margin:0;}
+
+  /* ---- hero ---- */
+  .hero{position:relative;padding:clamp(30px,5vw,52px) clamp(24px,4vw,44px);
+    border:1px solid var(--line-strong);border-radius:6px;background:
+      linear-gradient(180deg,var(--surface) 0%,var(--surface-2) 100%);
+    box-shadow:var(--shadow);overflow:hidden;}
+  /* drawing-sheet corner ticks */
+  .hero::before,.hero::after{content:"";position:absolute;width:16px;height:16px;
+    border:1.5px solid var(--brass);opacity:.55;}
+  .hero::before{top:14px;left:14px;border-right:0;border-bottom:0;}
+  .hero::after{bottom:14px;right:14px;border-left:0;border-top:0;}
+  .hero h1{font-size:clamp(1.95rem,6.2vw,4.2rem);margin:.5rem 0 .9rem;}
+  .hero h1 em{font-style:italic;color:var(--brass);}
+  .hero .lede{font-size:clamp(1.1rem,1.9vw,1.35rem);}
+  .herometa{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:22px;
+    font-family:var(--font-mono);font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);}
+  .herometa span{display:inline-flex;align-items:center;gap:7px;}
+  .herometa span::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--brass);}
+
+  /* ---- section frame ---- */
+  section{margin-top:clamp(48px,7vw,84px);}
+  .sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:26px;}
+  .sec-head h2{font-size:clamp(1.5rem,3vw,2.1rem);}
+  .sec-head .num{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.2em;color:var(--muted);
+    padding-top:.4em;white-space:nowrap;}
+  .prose p{color:var(--ink-2);max-width:64ch;margin:0 0 1rem;}
+  .prose strong{color:var(--ink);font-weight:600;}
+
+  /* ---- pillars ---- */
+  .pillars{display:grid;grid-template-columns:repeat(auto-fit,minmax(248px,1fr));gap:1px;
+    background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden;}
+  .pillar{background:var(--surface);padding:22px 22px 26px;display:flex;flex-direction:column;gap:9px;}
+  .pillar .tag{font-family:var(--font-mono);font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--brass);}
+  .pillar h3{font-size:1.16rem;}
+  .pillar p{margin:0;color:var(--ink-2);font-size:.96rem;line-height:1.55;}
+
+  /* ---- the loop (a real sequence -> numbered) ---- */
+  .loop{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden;}
+  .step{background:var(--surface);display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:baseline;
+    padding:17px 22px;}
+  .step .n{font-family:var(--font-mono);font-size:.82rem;color:var(--brass);font-weight:600;
+    font-variant-numeric:tabular-nums;padding-top:.15em;}
+  .step .b{font-size:1rem;color:var(--ink);}
+  .step .b span{color:var(--muted);}
+  .loop-foot{font-family:var(--font-mono);font-size:.76rem;letter-spacing:.06em;color:var(--muted);
+    margin-top:14px;text-align:center;}
+  .loop-foot b{color:var(--brass);font-weight:600;}
+
+  /* ---- traction ---- */
+  .real{position:relative;border:1px solid var(--line-strong);border-radius:6px;background:var(--evergreen);
+    color:#eef3ee;padding:clamp(26px,4vw,40px);overflow:hidden;}
+  :root[data-theme="light"] .real,:root:not([data-theme="dark"]) .real{color:#f2f6f0;}
+  .real h2{color:#fff;font-size:clamp(1.5rem,3vw,2rem);}
+  .real .lede{color:#e6efe7;margin-top:12px;}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;
+    background:#ffffff26;border:1px solid #ffffff26;border-radius:5px;overflow:hidden;margin-top:26px;}
+  .stat{background:var(--evergreen);padding:16px 18px;}
+  .stat .k{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:#bcd2c4;}
+  .stat .v{font-family:var(--font-display);font-size:1.15rem;color:#fff;margin-top:5px;line-height:1.15;}
+  .real::after{content:"";position:absolute;bottom:12px;right:12px;width:18px;height:18px;
+    border:1.5px solid var(--brass-bright);border-left:0;border-top:0;opacity:.6;}
+
+  /* ---- close ---- */
+  .close{margin-top:clamp(48px,7vw,84px);border-top:1px solid var(--line);padding-top:34px;}
+  .close h2{font-size:clamp(1.6rem,3.2vw,2.3rem);max-width:20ch;}
+  .close .lede{margin-top:14px;}
+  .sign{margin-top:26px;font-family:var(--font-mono);font-size:.76rem;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 14px;}
+  .sign b{color:var(--ink);font-weight:600;}
+
+  a{color:var(--brass);text-underline-offset:3px;}
+  a:focus-visible,.pillar:focus-visible{outline:2px solid var(--brass);outline-offset:3px;border-radius:3px;}
+  @media screen and (prefers-reduced-motion:no-preference){
+    .fade{opacity:0;transform:translateY(10px);animation:rise .7s var(--i,0s) forwards cubic-bezier(.2,.7,.3,1);}
+    @keyframes rise{to{opacity:1;transform:none;}}
+  }
+  /* phone screens: single column, roomier, bigger reading type */
+  @media (max-width:560px){
+    .wrap{padding:24px 18px 60px;}
+    .hero{padding:24px 20px;}
+    .pillars{grid-template-columns:1fr;}
+    .stats{grid-template-columns:1fr 1fr;}
+    .sec-head{flex-direction:column;align-items:flex-start;gap:2px;}
+    .sec-head .num{padding-top:0;}
+    section{margin-top:40px;}
+    .lede,.prose p,.pillar p,.step .b{font-size:1.05rem;line-height:1.62;}
+    .step{gap:14px;padding:15px 18px;}
+  }
+  /* PDF: phone-proportioned page + larger root type so it reads without zoom */
+  @media print{
+    html{font-size:18px;}
+    @page{size:150mm 235mm;margin:10mm;}
+    .wrap{padding:4px 0 18px;}
+    .pillars,.stats{grid-template-columns:1fr;}
+    .sec-head{flex-direction:column;align-items:flex-start;gap:2px;}
+    .fade{opacity:1 !important;transform:none !important;}
+    .hero,.real,.loop,.pillar,.step,.close,section{break-inside:avoid;}
+  }
+</style>
+
+<div class="hc">
+<div class="wrap">
+
+  <header class="hero fade">
+    <div class="kicker">HomeCaptain &nbsp;·&nbsp; a Forever Apps project</div>
+    <h1>The complete information&nbsp;layer for your <em>home.</em></h1>
+    <p class="lede">Your house generates records for decades — repairs, warranties, bills, blueprints, the plumber's number. All of it scatters across drawers, inboxes, and memory. HomeCaptain is the one place that holds it, understands it, and hands it back the moment you need it.</p>
+    <div class="herometa">
+      <span>Live on the web today</span>
+      <span>A Forever Apps project</span>
+    </div>
+  </header>
+
+  <section class="prose fade" style="--i:.06s">
+    <div class="sec-head"><span class="num">01</span><h2>The problem nobody has solved</h2></div>
+    <p>A home is the largest asset most people ever own, and the worst-documented. When the water heater fails, you can't remember who installed it or whether it's under warranty. When you file an insurance claim, you're reconstructing a lifetime of contents from nothing. When you sell, everything you learned about the house walks out the door with you.</p>
+    <p>There is no source of truth for a home. <strong>HomeCaptain is that source of truth</strong> — and the assistant that reads it back to you.</p>
+  </section>
+
+  <section class="fade" style="--i:.06s">
+    <div class="sec-head"><span class="num">02</span><h2>What it holds</h2></div>
+    <div class="pillars">
+      <div class="pillar"><div class="tag">Memory</div><h3>The Logbook</h3><p>Every repair, upgrade, and service visit — cost, vendor, photos, notes. Searchable history and spend by category. It only gets more valuable the longer you own the home.</p></div>
+      <div class="pillar"><div class="tag">Vault</div><h3>Documents &amp; Blueprints</h3><p>Bills, warranties, policies, permits, closing docs — and the floorplans and survey. Scanned, tied to the home, and instantly findable.</p></div>
+      <div class="pillar"><div class="tag">Answers</div><h3>Ask Your Manuals</h3><p>Snap a model number and the manual is captured for good — then just ask it. "How do I reset the dishwasher?" is answered from the actual document, not a drawer you'll dig through and lose again.</p></div>
+      <div class="pillar"><div class="tag">Protection</div><h3>Insurance Inventory</h3><p>Room-by-room contents with photos and values, one tap from a claim-ready PDF. Photograph a room and the AI drafts the list for you. Most people have nothing when disaster strikes.</p></div>
+      <div class="pillar"><div class="tag">Foresight</div><h3>Maintenance Engine</h3><p>Recurring and seasonal reminders — filters, gutters, HVAC, winterizing — tailored to the home's age, systems, and climate. And because it knows your models, "filter's due" comes with the exact part, one tap from reordered.</p></div>
+      <div class="pillar"><div class="tag">Trust</div><h3>Find a Pro &amp; Quotes</h3><p>Search vetted contractors near the home, keep the ones you've hired with your own rating, and let the AI read a repair quote and tell you what to ask before you sign.</p></div>
+      <div class="pillar"><div class="tag">Intelligence</div><h3>AI Concierge</h3><p>Scan a bill into a record. Summarize a home's history and spend. "What's due?" "Where's the water shutoff?" The connective tissue across everything above.</p></div>
+      <div class="pillar"><div class="tag">Design</div><h3>Reimagine the Space</h3><p>HomeCaptain isn't only about what breaks. Explore a redesign — furniture, paint, and style to try before you buy — on a to-scale floorplan that tells you whether the sofa actually fits before you order it.</p></div>
+    </div>
+  </section>
+
+  <section class="fade" style="--i:.06s">
+    <div class="sec-head"><span class="num">03</span><h2>The loop that hooks people</h2></div>
+    <p class="prose" style="margin-bottom:22px;color:var(--ink-2);max-width:64ch;">The everyday nightmare — <em>something broke, who do I call, and am I getting ripped off?</em> — solved end to end, in one place.</p>
+    <div class="loop">
+      <div class="step"><div class="n">1</div><div class="b">Find pros nearby <span>— by category, with real ratings</span></div></div>
+      <div class="step"><div class="n">2</div><div class="b">Collect their quotes <span>— snap or paste each one</span></div></div>
+      <div class="step"><div class="n">3</div><div class="b">AI analyzes and compares them <span>— line items, gaps, red flags, questions to ask</span></div></div>
+      <div class="step"><div class="n">4</div><div class="b">You hire with confidence</div></div>
+      <div class="step"><div class="n">5</div><div class="b">The job logs itself <span>— into the home's permanent record</span></div></div>
+      <div class="step"><div class="n">6</div><div class="b">The vendor is saved, with your rating</div></div>
+    </div>
+    <p class="loop-foot">next time it's <b>one tap</b> — the loop closes</p>
+  </section>
+
+  <section class="fade" style="--i:.06s">
+    <div class="real">
+      <div class="kicker" style="color:var(--brass-bright)">Not a mockup</div>
+      <h2 style="margin-top:.5rem">A working foundation is already live.</h2>
+      <p class="lede">The unglamorous plumbing that usually eats the first three months — accounts, auth, sync, storage, an AI pipeline — is built and running on the open web today. The vision above sits on top of a stack that already works.</p>
+      <div class="stats">
+        <div class="stat"><div class="k">Status</div><div class="v">Live end&#8209;to&#8209;end</div></div>
+        <div class="stat"><div class="k">Stack</div><div class="v">PWA · API · Supabase</div></div>
+        <div class="stat"><div class="k">Homes</div><div class="v">Multi&#8209;property</div></div>
+        <div class="stat"><div class="k">Storage</div><div class="v">Photos &amp; PDFs</div></div>
+        <div class="stat"><div class="k">AI</div><div class="v">Relay wired</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="prose fade" style="--i:.06s">
+    <div class="sec-head"><span class="num">04</span><h2>Why now</h2></div>
+    <p>Homeowners have never had more to track and fewer tools to track it with. Insurers want documented inventories. Property records, warranties, and smart-home gear multiply every year. Yet the category has no owner — no product that treats the home as a living, queryable record rather than a folder of PDFs.</p>
+    <p>The building blocks finally exist to do it cheaply: a small, modern stack and AI that can read a bill, grade a quote, or draft an inventory from a photo. <strong>The window is open, and the seat is empty.</strong></p>
+  </section>
+
+  <div class="close">
+    <div class="kicker">Where it's headed</div>
+    <h2>The foundation is poured. The interesting work is ahead.</h2>
+    <p class="lede">HomeCaptain starts as the place your home's records finally live — and grows into the assistant that reads them back, protects what matters, and helps you make the place better. One home at a time.</p>
+    <div class="sign">
+      <span>Built by <b>Chris &amp; Kristin Gramlich</b></span>
+      <span>MilSpo Life LLC</span>
+      <span>part of the Forever Apps portfolio</span>
+    </div>
+  </div>
+
+</div>
+</div>
