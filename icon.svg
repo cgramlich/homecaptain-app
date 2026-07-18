@@ -11,6 +11,6 @@
 <circle cx="350" cy="350" r="66" fill="#4a7fa5"/>
 <g transform="translate(350,350) scale(3.9) translate(-12,-12)" fill="none" stroke="#fdf7ec" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 <path d="M3 11l9-8 9 8"/>
-<path d="M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10"/>
+<path d="M5 10v11h14V10"/>
 </g>
 </svg>

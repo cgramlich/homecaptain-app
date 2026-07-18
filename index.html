@@ -249,9 +249,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.3.1";
+const APP_VERSION = "0.4.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-18.1";
+const BUILD = "2026-07-18.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1222,7 +1222,12 @@ function App(){
   return (
     <div className="app">
       {update.available &&
-        <button className="update-bar" onClick={()=>location.reload(true)}>
+        <button className="update-bar" onClick={()=>{
+            // Wipe the SW caches first so the reload can't be served a stale shell.
+            try { if(navigator.serviceWorker && navigator.serviceWorker.controller)
+                    navigator.serviceWorker.controller.postMessage("clearCache"); } catch(e){}
+            setTimeout(()=>location.reload(true), 120);
+          }}>
           <span>A new version of HomeCaptain is ready.</span>
           <span className="update-go">Update</span>
         </button>}
@@ -1290,6 +1295,16 @@ function App(){
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+// Offline service worker. Relative path, so its scope is this app's subpath
+// (/homecaptain-app/). Needs https or localhost; skipped silently elsewhere.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js")
+      .then(() => log("SW","registered"))
+      .catch(e => log("ERROR","sw register: "+e.message));
+  });
+}
 </script>
 </body>
 </html>
