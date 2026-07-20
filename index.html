@@ -140,6 +140,13 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .chip.violet{background:#a98bc422;color:#c3a9dd;}
 /* log + photos */
 .log-summary{font-size:12.5px;color:var(--ink-3);margin-top:14px;font-weight:500;}
+.rem-body{flex:1;min-width:0;text-align:left;background:none;border:none;padding:0;color:inherit;font:inherit;}
+.rem-done{flex:0 0 auto;width:34px;height:34px;border-radius:50%;background:var(--bg-4);border:1px solid var(--line-2);
+  display:inline-flex;align-items:center;justify-content:center;color:var(--ink-3);transition:.15s;}
+.rem-done:active{background:var(--amber-dim);color:var(--amber);border-color:var(--amber-line);}
+.item.overdue{border-color:#d1735c55;}
+.item.muted{opacity:.55;}
+.item.muted .item-title{text-decoration:line-through;}
 .photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin:2px 0 16px;}
 .thumb{position:relative;aspect-ratio:1;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--line-2);background:var(--bg-3);}
 .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -249,9 +256,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.4.0";
+const APP_VERSION = "0.5.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-18.2";
+const BUILD = "2026-07-20.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -517,6 +524,67 @@ const EVENT_CATEGORIES = [
 function catClass(cat){ const f = EVENT_CATEGORIES.find(x=>x.k===cat); return f && f.c ? f.c : ""; }
 function todayStr(){ const d=new Date(), p=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
 
+/* ---- reminder scheduling ----
+   All reminder dates are plain "YYYY-MM-DD" local dates, never Date objects in
+   storage, so nothing shifts when the device changes timezone. Parsing builds a
+   LOCAL midnight date (new Date("2026-07-20") would parse as UTC and can land on
+   the previous day west of Greenwich). */
+const REPEAT_UNITS = ["days","weeks","months","years"];
+function parseDay(s){ const p=String(s||"").split("-").map(Number); return new Date(p[0], (p[1]||1)-1, p[2]||1); }
+function dayStr(d){ const p=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+
+// Add an interval to a date. Month/year math clamps to the end of the target
+// month so "Jan 31 + 1 month" lands on Feb 28, not Mar 3.
+function addInterval(dateStr, every, unit){
+  const d = parseDay(dateStr);
+  const n = Math.max(1, Number(every) || 1);
+  if(unit === "days"){ d.setDate(d.getDate() + n); }
+  else if(unit === "weeks"){ d.setDate(d.getDate() + n*7); }
+  else {
+    const day = d.getDate();
+    d.setDate(1);
+    if(unit === "years") d.setFullYear(d.getFullYear() + n); else d.setMonth(d.getMonth() + n);
+    const last = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+    d.setDate(Math.min(day, last));
+  }
+  return dayStr(d);
+}
+
+function daysUntil(dateStr){
+  if(!dateStr) return 0;
+  return Math.round((parseDay(dateStr) - parseDay(todayStr())) / 86400000);
+}
+
+// Repeating reminders reschedule from the day you actually completed them, not
+// from the missed due date. Flushing the water heater three months late should
+// put the next one a year out from today, not immediately overdue again.
+function nextDueFromToday(r){ return addInterval(todayStr(), r.every, r.unit); }
+
+function remStatus(r){
+  if(r.doneAt) return "done";
+  const n = daysUntil(r.dueDate);
+  if(n < 0)  return "overdue";
+  if(n === 0) return "today";
+  if(n <= 30) return "soon";
+  return "later";
+}
+
+function repeatLabel(r){
+  if(!r.repeat || !r.every) return "";
+  const n = Number(r.every) || 1;
+  const u = n === 1 ? String(r.unit||"").replace(/s$/,"") : r.unit;
+  return n === 1 ? "every " + u : "every " + n + " " + u;
+}
+
+// Sensible starting points for a home. Shown in the empty state as one-tap adds.
+const REMINDER_PRESETS = [
+  { title:"Replace HVAC filter",        category:"Maintenance", repeat:true, every:3, unit:"months" },
+  { title:"Clean the gutters",          category:"Maintenance", repeat:true, every:6, unit:"months" },
+  { title:"Test smoke & CO detectors",  category:"Inspection",  repeat:true, every:6, unit:"months" },
+  { title:"Flush the water heater",     category:"Maintenance", repeat:true, every:1, unit:"years"  },
+  { title:"Service the HVAC system",    category:"Service",     repeat:true, every:1, unit:"years"  },
+];
+
 /* ============================================================
    DATA STORE HOOK
    Holds all entities in memory + localStorage. Optimistic local writes, then
@@ -664,6 +732,8 @@ const ICONS = {
   back:    ["M19 12H5","M12 19l-7-7 7-7"],
   refresh: ["M23 4v6h-6","M1 20v-6h6","M3.51 9a9 9 0 0 1 14.85-3.36L23 10","M1 14l4.64 4.36A9 9 0 0 0 20.49 15"],
   camera:  ["M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z","M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"],
+  check:   ["M20 6L9 17l-5-5"],
+  undo:    ["M3 7v6h6","M3.51 13a9 9 0 1 0 2.13-5.36L3 10"],
 };
 
 /* ============================================================
@@ -1141,6 +1211,181 @@ function LogScreen({ store, home, onAdd, onEdit }){
   );
 }
 
+function ReminderSheet({ reminder, preset, homeId, onSave, onDelete, onClose }){
+  const base = reminder || preset || null;
+  const [id] = useState(() => reminder ? reminder.id : uid());
+  const [title, setTitle] = useState(base ? (base.title||"") : "");
+  const [category, setCategory] = useState(base && base.category ? base.category : "Maintenance");
+  const [dueDate, setDueDate] = useState(reminder ? (reminder.dueDate||todayStr()) : todayStr());
+  const [repeat, setRepeat] = useState(base ? !!base.repeat : false);
+  const [every, setEvery] = useState(base && base.every ? String(base.every) : "3");
+  const [unit, setUnit] = useState(base && base.unit ? base.unit : "months");
+  const [notes, setNotes] = useState(reminder ? (reminder.notes||"") : "");
+
+  const save = () => {
+    if(!title.trim()) return;
+    onSave({
+      id, home_id: homeId, title: title.trim(), category, dueDate,
+      repeat,
+      every: repeat ? Math.max(1, Number(every)||1) : null,
+      unit:  repeat ? unit : null,
+      notes: notes.trim(),
+      doneAt:     reminder ? (reminder.doneAt||null) : null,
+      lastDoneAt: reminder ? (reminder.lastDoneAt||null) : null,
+      createdAt:  reminder ? reminder.createdAt : nowISO(),
+      updatedAt:  nowISO(),
+    });
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{reminder ? "Edit reminder" : "New reminder"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        <div className="title-field">
+          <label className="label">What needs doing</label>
+          <input className="title-input" value={title} onChange={e=>setTitle(e.target.value)}
+            placeholder="e.g. Replace HVAC filter" autoFocus />
+        </div>
+
+        <div className="field">
+          <label className="label">Category</label>
+          <div className="pills">
+            {EVENT_CATEGORIES.map(c =>
+              <button key={c.k} className={"pill "+(category===c.k?"on":"")} onClick={()=>setCategory(c.k)}>{c.k}</button>)}
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="label">{repeat ? "First due" : "Due"}</label>
+          <input className="input" type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} />
+        </div>
+
+        <div className="field">
+          <label className="label">Repeats</label>
+          <div className="pills">
+            <button className={"pill "+(!repeat?"on":"")} onClick={()=>setRepeat(false)}>One time</button>
+            <button className={"pill "+(repeat?"on":"")} onClick={()=>setRepeat(true)}>Repeats</button>
+          </div>
+          {repeat &&
+            <div className="row" style={{marginTop:12}}>
+              <div className="field" style={{flex:"0 0 96px", marginBottom:0}}>
+                <input className="input" type="number" inputMode="numeric" min="1" value={every}
+                  onChange={e=>setEvery(e.target.value)} />
+              </div>
+              <div className="field" style={{flex:1, marginBottom:0}}>
+                <select className="select" value={unit} onChange={e=>setUnit(e.target.value)}>
+                  {REPEAT_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+            </div>}
+          {repeat && <div className="hint">Reschedules from the day you mark it done, so falling behind never leaves it permanently overdue.</div>}
+        </div>
+
+        <div className="field">
+          <label className="label">Notes</label>
+          <textarea className="textarea" value={notes} onChange={e=>setNotes(e.target.value)}
+            placeholder="Filter size, part number, who to call..." />
+        </div>
+
+        <button className="btn btn-primary btn-block" onClick={save} disabled={!title.trim()}>
+          {reminder ? "Save changes" : "Add reminder"}
+        </button>
+        {reminder &&
+          <button className="btn btn-danger btn-block" style={{marginTop:10}}
+            onClick={()=>{ if(confirm("Delete this reminder?")) onDelete(reminder.id); }}>
+            Delete reminder
+          </button>}
+      </div>
+    </>
+  );
+}
+
+function ReminderRow({ r, onEdit, onComplete }){
+  const st = remStatus(r);
+  const n = daysUntil(r.dueDate);
+  const due =
+    st === "done"    ? "Completed" :
+    st === "today"   ? "Due today" :
+    st === "overdue" ? (n === -1 ? "1 day overdue" : Math.abs(n) + " days overdue") :
+    n === 1          ? "Due tomorrow" : "Due in " + n + " days";
+  const rep = repeatLabel(r);
+  return (
+    <div className={"item" + (st==="overdue" ? " overdue" : "") + (st==="done" ? " muted" : "")}>
+      <button className="rem-body" onClick={()=>onEdit(r)}>
+        <div className="item-title">{r.title}</div>
+        <div className="item-meta">
+          <span className={"chip "+catClass(r.category)}>{r.category}</span>
+          <span className={"chip"+(st==="overdue" ? " red" : "")}>{due}</span>
+          {r.dueDate && st!=="done" && <span className="chip">{fmtDate(r.dueDate)}</span>}
+          {rep && <span className="chip">{rep}</span>}
+        </div>
+      </button>
+      <button className="rem-done" onClick={()=>onComplete(r)}
+        aria-label={st==="done" ? "Reopen reminder" : "Mark done"}>
+        <Icon d={st==="done" ? ICONS.undo : ICONS.check} size={17}/>
+      </button>
+    </div>
+  );
+}
+
+function RemindersScreen({ store, home, onAdd, onEdit, onComplete }){
+  const all = (store.data.reminders||[]).filter(r => r.home_id === home.id);
+
+  if(!all.length){
+    return (
+      <div className="empty">
+        <div className="glyph">!</div>
+        <h3 className="title-sm">Nothing scheduled yet</h3>
+        <p>Stay ahead of the work at {home.name}. Tap a common one to start, or add your own.</p>
+        <div className="pills" style={{justifyContent:"center", marginTop:18}}>
+          {REMINDER_PRESETS.map(p =>
+            <button key={p.title} className="pill" onClick={()=>onAdd(p)}>{p.title}</button>)}
+        </div>
+        <button className="btn btn-primary" style={{marginTop:18}} onClick={()=>onAdd(null)}>
+          <Icon d={ICONS.plus} size={16}/> Add a reminder
+        </button>
+      </div>
+    );
+  }
+
+  const byDue = (a,b) => String(a.dueDate||"").localeCompare(String(b.dueDate||""));
+  const open = all.filter(r => !r.doneAt);
+  const pick = (s) => open.filter(r => remStatus(r) === s).sort(byDue);
+  const groups = [
+    ["Overdue",      pick("overdue")],
+    ["Today",        pick("today")],
+    ["Next 30 days", pick("soon")],
+    ["Later",        pick("later")],
+    ["Completed",    all.filter(r => r.doneAt).sort((a,b)=>String(b.doneAt||"").localeCompare(String(a.doneAt||"")))],
+  ].filter(g => g[1].length);
+
+  const overdueN = pick("overdue").length;
+  const soonN = pick("today").length + pick("soon").length;
+
+  return (
+    <div>
+      <div className="log-summary">
+        {overdueN > 0 ? overdueN + " overdue" : "Nothing overdue"}
+        {soonN > 0 ? " · " + soonN + " due soon" : ""}
+      </div>
+      {groups.map(g => (
+        <div key={g[0]}>
+          <div className="set-group">{g[0]}</div>
+          <div className="list" style={{marginTop:0}}>
+            {g[1].map(r => <ReminderRow key={r.id} r={r} onEdit={onEdit} onComplete={onComplete} />)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ============================================================
    APP SHELL
    ============================================================ */
@@ -1156,6 +1401,7 @@ function App(){
   const [tab, setTab] = useState("homes");
   const [sheet, setSheet] = useState(null);   // null | {home}
   const [eventSheet, setEventSheet] = useState(null);   // null | {event}
+  const [remSheet, setRemSheet] = useState(null);       // null | {reminder, preset}
   const [inSettings, setInSettings] = useState(false);
   const [toast, setToast] = useState("");
   const [update, setUpdate] = useState({ state:"", available:false });
@@ -1208,6 +1454,39 @@ function App(){
     store.saveCollection("events", (store.data.events||[]).filter(e => e.id !== id));
     setEventSheet(null);
     showToast("Entry deleted");
+  };
+
+  // ---- reminder handlers ----
+  const saveReminder = (rec) => {
+    const list = store.data.reminders || [];
+    const exists = list.some(r => r.id === rec.id);
+    const next = exists ? list.map(r => r.id===rec.id ? rec : r) : [rec, ...list];
+    store.saveCollection("reminders", next);
+    setRemSheet(null);
+    showToast(exists ? "Reminder updated" : "Reminder added");
+  };
+  const deleteReminder = (id) => {
+    store.saveCollection("reminders", (store.data.reminders||[]).filter(r => r.id !== id));
+    setRemSheet(null);
+    showToast("Reminder deleted");
+  };
+  // Repeating: roll the due date forward from today. One-time: toggle done/reopen.
+  const completeReminder = (r) => {
+    const list = store.data.reminders || [];
+    let next, msg;
+    if(r.repeat && r.every){
+      const nd = nextDueFromToday(r);
+      next = list.map(x => x.id===r.id ? {...x, dueDate:nd, lastDoneAt:nowISO(), doneAt:null, updatedAt:nowISO()} : x);
+      msg = "Done · next due " + fmtDate(nd);
+    } else {
+      const reopening = !!r.doneAt;
+      next = list.map(x => x.id===r.id
+        ? {...x, doneAt: reopening ? null : nowISO(), lastDoneAt: reopening ? x.lastDoneAt : nowISO(), updatedAt:nowISO()}
+        : x);
+      msg = reopening ? "Reopened" : "Marked done";
+    }
+    store.saveCollection("reminders", next);
+    showToast(msg);
   };
 
   if(!store.authReady){
@@ -1263,7 +1542,10 @@ function App(){
                 ? <ComingSoon glyph="[]" title="Bills & documents" blurb="Scan a bill or store warranties, manuals, and receipts. Coming next." />
                 : <ComingSoon glyph="HC" title="Add a home first" blurb="Documents are organized by property. Add a home to start." />)}
               {tab==="remind" && (activeHome
-                ? <ComingSoon glyph="!" title="Maintenance reminders" blurb="Recurring and seasonal reminders so nothing at the house slips. Coming next." />
+                ? <RemindersScreen store={store} home={activeHome}
+                    onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
+                    onEdit={(r)=>setRemSheet({reminder:r, preset:null})}
+                    onComplete={completeReminder} />
                 : <ComingSoon glyph="HC" title="Add a home first" blurb="Reminders are organized by property. Add a home to start." />)}
             </>}
       </div>
@@ -1272,6 +1554,8 @@ function App(){
         <button className="fab" onClick={()=>setSheet({home:null})} aria-label="Add home"><Icon d={ICONS.plus} size={26}/></button>}
       {!inSettings && tab==="log" && activeHome &&
         <button className="fab" onClick={()=>setEventSheet({event:null})} aria-label="Log an entry"><Icon d={ICONS.plus} size={26}/></button>}
+      {!inSettings && tab==="remind" && activeHome && (store.data.reminders||[]).some(r=>r.home_id===activeHome.id) &&
+        <button className="fab" onClick={()=>setRemSheet({reminder:null, preset:null})} aria-label="Add reminder"><Icon d={ICONS.plus} size={26}/></button>}
 
       {!inSettings &&
         <nav className="nav">
@@ -1288,6 +1572,10 @@ function App(){
 
       {eventSheet && activeHome &&
         <EventSheet event={eventSheet.event} homeId={activeHome.id} onSave={saveEvent} onDelete={deleteEvent} onClose={()=>setEventSheet(null)} />}
+
+      {remSheet && activeHome &&
+        <ReminderSheet reminder={remSheet.reminder} preset={remSheet.preset} homeId={activeHome.id}
+          onSave={saveReminder} onDelete={deleteReminder} onClose={()=>setRemSheet(null)} />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>
