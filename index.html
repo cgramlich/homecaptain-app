@@ -256,9 +256,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.7.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-20.1";
+const BUILD = "2026-07-20.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -311,6 +311,12 @@ const SUPABASE_URL = "https://rlgqrdqcealawneibcwa.supabase.co";
 // PUBLIC-SAFE by design - it only permits auth, never data access.
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJsZ3FyZHFjZWFsYXduZWliY3dhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MjE3ODIsImV4cCI6MjA5OTI5Nzc4Mn0.dk1mkPOpyYSyRoqr-b3nTl5s6d3kebp5nN2Bc1qGCJ4";
 const API_BASE = "https://web-production-cd84d.up.railway.app";
+
+// Dropbox Chooser (Drop-ins) app key. PUBLIC-SAFE: it only permits the Chooser
+// popup and is locked to the domains you whitelist in the Dropbox App Console.
+// Leave blank to hide the Dropbox option. Register a "Chooser/Saver" app at
+// https://www.dropbox.com/developers/apps and whitelist the app's domain.
+const DROPBOX_APP_KEY = "";
 
 // Supabase client - AUTH ONLY (login, session, token refresh). Data + AI never
 // touch it; they go through our backend with the user's access token.
@@ -397,6 +403,22 @@ async function signFile(path){
   if(!r.ok) throw new Error("Sign failed ("+r.status+")");
   return (await r.json()).url;
 }
+// Import a file the backend fetches from a URL (Dropbox direct link or a pasted
+// share link). The browser never downloads it; the server pulls + stores it.
+async function importFromUrl(path, url){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/photos/from_url", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ path, url })
+  });
+  if(!r.ok){
+    let detail = ""; try{ detail = (await r.json()).detail || ""; }catch(e){}
+    throw new Error(detail || ("Import failed ("+r.status+")"));
+  }
+  return await r.json();   // { path, size, content_type }
+}
 async function deleteFile(path){
   const token = await authToken();
   if(!token) return;
@@ -423,6 +445,18 @@ function resizeImage(file){
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not load that image.")); };
     img.src = url;
+  });
+}
+
+// Read any file (PDF or image) as a base64 data URI, no re-encoding, so PDFs
+// upload byte-for-byte and the backend records the right content type. Used by
+// the document vault; event photos still go through resizeImage to save space.
+function fileToDataURL(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error("Could not read that file."));
+    r.readAsDataURL(file);
   });
 }
 
@@ -585,6 +619,76 @@ const REMINDER_PRESETS = [
   { title:"Service the HVAC system",    category:"Service",     repeat:true, every:1, unit:"years"  },
 ];
 
+/* ---- document vault ----
+   Categories span the whole life of a home, not just the purchase. Order is the
+   display order; the color reuses the existing chip classes. */
+const DOC_CATEGORIES = [
+  { k:"Purchase & Closing",    c:"amber"  },
+  { k:"Title & Survey",        c:"blue"   },
+  { k:"Disclosures",           c:"violet" },
+  { k:"HOA",                   c:"green"  },
+  { k:"Insurance",             c:"blue"   },
+  { k:"Warranties & Manuals",  c:"green"  },
+  { k:"Taxes & Financial",     c:"amber"  },
+  { k:"Other",                 c:""       },
+];
+function docCatClass(cat){ const f = DOC_CATEGORIES.find(x=>x.k===cat); return f && f.c ? f.c : ""; }
+
+// Guess a category from the filename. Order matters: "Closing Disclosure" must
+// hit Purchase & Closing (via "closing") before Disclosures. Rules cover the
+// standard US real estate packet plus later home-ownership documents. Roughly
+// 90% right with zero AI cost; the user can re-tag any miss in one tap.
+const DOC_RULES = [
+  [/closing|amendment|addendum|financ|contract|earnest|option fee|one.?to.?four|purchase agreement|settlement|deed|promissory|escrow instruction/i, "Purchase & Closing"],
+  [/survey|title|t.?47|plat|legal descr|parcel|easement/i, "Title & Survey"],
+  [/disclos|septic|lead.?based|brokerage|non.?realty|mud notice|information about/i, "Disclosures"],
+  [/\bhoa\b|homeowners? assoc|\bassociation\b|cc&r|\bccr\b|covenant|bylaw|community/i, "HOA"],
+  [/insur|policy|flood cert|home.?warranty|claim/i, "Insurance"],
+  [/warrant|manual|owner.?s guide|spec sheet/i, "Warranties & Manuals"],
+  [/tax|mortgage statement|1098|appraisal|amortiz|payoff/i, "Taxes & Financial"],
+];
+function classifyDoc(filename){
+  const n = String(filename||"");
+  for(const [re, cat] of DOC_RULES){ if(re.test(n)) return cat; }
+  return "Other";
+}
+
+const stripExt  = (s) => String(s||"").replace(/\.[a-z0-9]{1,5}$/i, "");
+const safeName  = (s) => String(s||"file").replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 90) || "file";
+function humanSize(b){
+  b = Number(b) || 0;
+  if(b < 1024) return b + " B";
+  if(b < 1048576) return Math.round(b/1024) + " KB";
+  return (b/1048576).toFixed(1) + " MB";
+}
+const DOC_MAX_BYTES = 20 * 1024 * 1024;   // 20 MB/file cap; keeps JSON POST bodies sane
+function isPdfName(n){ return /\.pdf$/i.test(String(n||"")); }
+
+// Derive a filename from a URL when the user doesn't type one.
+function nameFromUrl(u){
+  try{ const p = new URL(u); const seg = decodeURIComponent((p.pathname.split("/").filter(Boolean).pop())||""); return seg || "Imported document"; }
+  catch(e){ return "Imported document"; }
+}
+
+// Lazily load the Dropbox Chooser script once, only if a key is configured.
+// Preloaded on mount so choose() can run synchronously inside the click (else
+// the popup gets blocked). Resolves to window.Dropbox.
+let _dropboxPromise = null;
+function ensureDropbox(){
+  if(typeof window !== "undefined" && window.Dropbox) return Promise.resolve(window.Dropbox);
+  if(!DROPBOX_APP_KEY) return Promise.reject(new Error("Dropbox isn't set up yet."));
+  if(_dropboxPromise) return _dropboxPromise;
+  _dropboxPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.id = "dropboxjs"; s.src = "https://www.dropbox.com/static/api/2/dropins.js";
+    s.setAttribute("data-app-key", DROPBOX_APP_KEY);
+    s.onload = () => window.Dropbox ? resolve(window.Dropbox) : reject(new Error("Dropbox failed to load."));
+    s.onerror = () => reject(new Error("Dropbox failed to load."));
+    document.head.appendChild(s);
+  });
+  return _dropboxPromise;
+}
+
 /* ============================================================
    DATA STORE HOOK
    Holds all entities in memory + localStorage. Optimistic local writes, then
@@ -734,6 +838,10 @@ const ICONS = {
   camera:  ["M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z","M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"],
   check:   ["M20 6L9 17l-5-5"],
   undo:    ["M3 7v6h6","M3.51 13a9 9 0 1 0 2.13-5.36L3 10"],
+  edit:    ["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7","M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"],
+  file:    ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z","M14 2v6h6"],
+  external:["M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6","M15 3h6v6","M10 14L21 3"],
+  upload:  ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M17 8l-5-5-5 5","M12 3v12"],
 };
 
 /* ============================================================
@@ -1386,6 +1494,187 @@ function RemindersScreen({ store, home, onAdd, onEdit, onComplete }){
   );
 }
 
+// Open a stored file in a new tab. The blank tab is opened SYNCHRONOUSLY inside
+// the click so Safari/iOS doesn't treat the post-await window.open as a popup.
+async function openStoredFile(path, onErr){
+  let w = null;
+  try { w = window.open("about:blank", "_blank"); } catch(e){}
+  try {
+    const url = await signFile(path);
+    if(w) w.location = url; else window.location.href = url;
+  } catch(e){
+    if(w) { try{ w.close(); }catch(_){ } }
+    log("ERROR","openStoredFile: "+e.message);
+    if(onErr) onErr("Could not open that document.");
+  }
+}
+
+function ImportSheet({ showDropbox, onDevice, onDropbox, onLink, onClose }){
+  const [mode, setMode] = useState("menu");   // menu | link
+  const [url, setUrl] = useState("");
+  const [name, setName] = useState("");
+  const submitLink = () => { const u = url.trim(); if(!u) return; onLink(u, name.trim()); };
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{mode==="link" ? "Import from a link" : "Add documents"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        {mode==="menu" ? (
+          <div style={{display:"flex", flexDirection:"column", gap:10}}>
+            <button className="btn btn-ghost btn-block" onClick={onDevice}><Icon d={ICONS.upload} size={17}/> This device</button>
+            {showDropbox &&
+              <button className="btn btn-ghost btn-block" onClick={onDropbox}><Icon d={ICONS.file} size={17}/> Dropbox</button>}
+            <button className="btn btn-ghost btn-block" onClick={()=>setMode("link")}><Icon d={ICONS.external} size={17}/> From a link</button>
+            <div className="hint" style={{marginTop:4}}>
+              Files copy into HomeCaptain, so they stay put even if the original moves or a link expires.
+              {!showDropbox && " Dropbox import turns on once its app key is set."}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="field">
+              <label className="label">File link</label>
+              <input className="input" value={url} onChange={e=>setUrl(e.target.value)}
+                placeholder="Paste a Box, Drive, or direct file link" autoFocus />
+            </div>
+            <div className="field">
+              <label className="label">Name (optional)</label>
+              <input className="input" value={name} onChange={e=>setName(e.target.value)}
+                placeholder="Leave blank to use the file name" />
+            </div>
+            <button className="btn btn-primary btn-block" onClick={submitLink} disabled={!url.trim()}>Import</button>
+            <button className="assist-toggle" style={{marginTop:10}} onClick={()=>setMode("menu")}>Back</button>
+            <div className="hint" style={{marginTop:8}}>
+              The link must point straight at the file, or be a share link set to "anyone with the link."
+              Some Google Drive and Box links need to be made public first.
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function DocSheet({ doc, onSave, onDelete, onClose, onOpen }){
+  const [name, setName] = useState(doc ? (doc.name||"") : "");
+  const [category, setCategory] = useState(doc ? (doc.category||"Other") : "Other");
+  const [note, setNote] = useState(doc ? (doc.note||"") : "");
+  if(!doc) return null;
+
+  const save = () => {
+    if(!name.trim()) return;
+    onSave({ ...doc, name: name.trim(), category, note: note.trim(), updatedAt: nowISO() });
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Document</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        <button className="btn btn-ghost btn-block" style={{marginBottom:16}} onClick={()=>onOpen(doc)}>
+          <Icon d={ICONS.external} size={17}/> Open {isPdfName(doc.path) ? "PDF" : "file"}
+        </button>
+
+        <div className="title-field">
+          <label className="label">Name</label>
+          <input className="title-input" value={name} onChange={e=>setName(e.target.value)} autoFocus />
+        </div>
+
+        <div className="field">
+          <label className="label">Category</label>
+          <div className="pills">
+            {DOC_CATEGORIES.map(c =>
+              <button key={c.k} className={"pill "+(category===c.k?"on":"")} onClick={()=>setCategory(c.k)}>{c.k}</button>)}
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="label">Note</label>
+          <textarea className="textarea" value={note} onChange={e=>setNote(e.target.value)}
+            placeholder="Anything worth remembering about this document..." />
+        </div>
+
+        <div className="facts">
+          {doc.size ? <span className="chip">{humanSize(doc.size)}</span> : null}
+          {doc.createdAt ? <span className="chip">Added {fmtDate(doc.createdAt)}</span> : null}
+        </div>
+
+        <button className="btn btn-primary btn-block" onClick={save} disabled={!name.trim()}>Save changes</button>
+        <button className="btn btn-danger btn-block" style={{marginTop:10}}
+          onClick={()=>{ if(confirm("Delete this document? The file is removed from storage.")) onDelete(doc); }}>
+          Delete document
+        </button>
+      </div>
+    </>
+  );
+}
+
+function DocRow({ d, onEdit, onOpen }){
+  return (
+    <div className="item">
+      <button className="rem-body" onClick={()=>onOpen(d)}>
+        <div className="item-title">{d.name}</div>
+        <div className="item-meta">
+          <span className="chip">{isPdfName(d.path) ? "PDF" : "Image"}</span>
+          {d.size ? <span className="chip">{humanSize(d.size)}</span> : null}
+          {d.createdAt ? <span className="chip">{fmtDate(d.createdAt)}</span> : null}
+        </div>
+      </button>
+      <button className="rem-done" onClick={()=>onEdit(d)} aria-label="Edit document">
+        <Icon d={ICONS.edit} size={16}/>
+      </button>
+    </div>
+  );
+}
+
+function DocsScreen({ store, home, onAdd, onEdit, onOpen }){
+  const all = (store.data.documents||[]).filter(d => d.home_id === home.id);
+
+  if(!all.length){
+    return (
+      <div className="empty">
+        <div className="glyph">[]</div>
+        <h3 className="title-sm">No documents yet</h3>
+        <p>Keep everything for {home.name} in one place: the closing packet, survey, disclosures, HOA papers, warranties, and insurance. Add PDFs or photos and they sort themselves.</p>
+        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+          <Icon d={ICONS.upload} size={16}/> Add documents
+        </button>
+      </div>
+    );
+  }
+
+  const byNew = (a,b) => String(b.createdAt||"").localeCompare(String(a.createdAt||""));
+  const total = all.reduce((s,d)=> s + (Number(d.size)||0), 0);
+  const groups = DOC_CATEGORIES
+    .map(c => [c.k, all.filter(d => (d.category||"Other") === c.k).sort(byNew)])
+    .filter(g => g[1].length);
+
+  return (
+    <div>
+      <div className="log-summary">
+        {all.length} {all.length===1?"document":"documents"}{total>0 ? " · " + humanSize(total) : ""}
+      </div>
+      {groups.map(g => (
+        <div key={g[0]}>
+          <div className="set-group">{g[0]}</div>
+          <div className="list" style={{marginTop:0}}>
+            {g[1].map(d => <DocRow key={d.id} d={d} onEdit={onEdit} onOpen={onOpen} />)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ============================================================
    APP SHELL
    ============================================================ */
@@ -1402,6 +1691,14 @@ function App(){
   const [sheet, setSheet] = useState(null);   // null | {home}
   const [eventSheet, setEventSheet] = useState(null);   // null | {event}
   const [remSheet, setRemSheet] = useState(null);       // null | {reminder, preset}
+  const [docSheet, setDocSheet] = useState(null);       // null | {doc}
+  const [docBusy, setDocBusy] = useState("");           // "" | "Adding 3 of 16..."
+  const [importOpen, setImportOpen] = useState(false);
+  const docFileRef = useRef(null);
+
+  // Preload the Dropbox Chooser (if configured) so choose() runs inside the
+  // click gesture instead of after an async load, which browsers would block.
+  useEffect(() => { if(DROPBOX_APP_KEY) ensureDropbox().catch(()=>{}); }, []);
   const [inSettings, setInSettings] = useState(false);
   const [toast, setToast] = useState("");
   const [update, setUpdate] = useState({ state:"", available:false });
@@ -1470,6 +1767,106 @@ function App(){
     setRemSheet(null);
     showToast("Reminder deleted");
   };
+  // ---- document handlers ----
+  // Batch add: each picked file becomes its own auto-classified document. Uploads
+  // run one at a time so the progress count is honest and memory stays bounded.
+  const addDocuments = async (fileList, homeId) => {
+    const files = Array.from(fileList || []);
+    if(!files.length) return;
+    const added = [];
+    let skipped = 0;
+    for(let i=0; i<files.length; i++){
+      const f = files[i];
+      setDocBusy("Adding " + (i+1) + " of " + files.length + "…");
+      if(f.size > DOC_MAX_BYTES){ skipped++; log("DOC","skipped oversize "+f.name+" ("+humanSize(f.size)+")"); continue; }
+      try{
+        const dataUrl = await fileToDataURL(f);
+        const docId = uid();
+        const path = "documents/" + docId + "/" + safeName(f.name);
+        await uploadFile(path, dataUrl);
+        added.push({
+          id: docId, home_id: homeId,
+          name: stripExt(f.name), category: classifyDoc(f.name),
+          path, size: f.size, mime: f.type || (isPdfName(f.name) ? "application/pdf" : ""),
+          note: "", createdAt: nowISO(), updatedAt: nowISO(),
+        });
+      }catch(e){ skipped++; log("ERROR","addDocuments "+f.name+": "+e.message); }
+    }
+    setDocBusy("");
+    if(added.length){
+      store.saveCollection("documents", [...added, ...(store.data.documents||[])]);
+    }
+    const msg = added.length
+      ? added.length + " added" + (skipped ? ", " + skipped + " skipped" : "")
+      : (skipped ? "Nothing added (" + skipped + " skipped)" : "Nothing added");
+    showToast(msg);
+  };
+  const pickDocuments = () => { if(docFileRef.current) docFileRef.current.click(); };
+  const onDocFiles = (e) => {
+    const files = e.target.files;
+    e.target.value = "";
+    const homes = store.data.homes || [];
+    const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
+    if(ah) addDocuments(files, ah.id);
+  };
+  // Shared by Dropbox + link import: the backend fetches each URL and stores it.
+  const addFromUrls = async (items, homeId) => {
+    if(!items.length) return;
+    const added = []; let failed = 0;
+    for(let i=0; i<items.length; i++){
+      const it = items[i];
+      setDocBusy("Importing " + (i+1) + " of " + items.length + "…");
+      try{
+        const docId = uid();
+        const path = "documents/" + docId + "/" + safeName(it.name);
+        const res = await importFromUrl(path, it.url);
+        added.push({
+          id: docId, home_id: homeId,
+          name: stripExt(it.name), category: classifyDoc(it.name),
+          path, size: (res && res.size) || it.bytes || 0, mime: (res && res.content_type) || "",
+          note: "", createdAt: nowISO(), updatedAt: nowISO(),
+        });
+      }catch(e){ failed++; log("ERROR","import "+it.name+": "+e.message);
+        if(items.length===1) showToast(e.message); }
+    }
+    setDocBusy("");
+    if(added.length) store.saveCollection("documents", [...added, ...(store.data.documents||[])]);
+    if(added.length || items.length>1)
+      showToast(added.length ? added.length + " imported" + (failed ? ", " + failed + " failed" : "") : "Import failed");
+  };
+  const chooseDropbox = (homeId) => {
+    setImportOpen(false);
+    if(!(window.Dropbox && window.Dropbox.choose)){
+      ensureDropbox().then(()=>showToast("Dropbox is ready, tap Dropbox again")).catch(e=>showToast(e.message));
+      return;
+    }
+    window.Dropbox.choose({
+      linkType: "direct", multiselect: true,
+      extensions: [".pdf",".png",".jpg",".jpeg",".gif",".webp"],
+      success: (files) => addFromUrls(files.map(f => ({ name:f.name, url:f.link, bytes:f.bytes })), homeId),
+      cancel: () => {},
+    });
+  };
+  const importLink = (url, name, homeId) => {
+    setImportOpen(false);
+    addFromUrls([{ name: name || nameFromUrl(url), url }], homeId);
+  };
+
+  const saveDoc = (rec) => {
+    const list = store.data.documents || [];
+    const next = list.map(d => d.id===rec.id ? rec : d);
+    store.saveCollection("documents", next);
+    setDocSheet(null);
+    showToast("Document updated");
+  };
+  const deleteDoc = (d) => {
+    store.saveCollection("documents", (store.data.documents||[]).filter(x => x.id !== d.id));
+    if(d.path) deleteFile(d.path);
+    setDocSheet(null);
+    showToast("Document deleted");
+  };
+  const openDoc = (d) => { openStoredFile(d.path, showToast); };
+
   // Repeating: roll the due date forward from today. One-time: toggle done/reopen.
   const completeReminder = (r) => {
     const list = store.data.reminders || [];
@@ -1539,7 +1936,7 @@ function App(){
                 ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})} />
                 : <ComingSoon glyph="HC" title="Add a home first" blurb="The log is organized by property. Add a home to start." />)}
               {tab==="docs" && (activeHome
-                ? <ComingSoon glyph="[]" title="Bills & documents" blurb="Scan a bill or store warranties, manuals, and receipts. Coming next." />
+                ? <DocsScreen store={store} home={activeHome} onAdd={()=>setImportOpen(true)} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} />
                 : <ComingSoon glyph="HC" title="Add a home first" blurb="Documents are organized by property. Add a home to start." />)}
               {tab==="remind" && (activeHome
                 ? <RemindersScreen store={store} home={activeHome}
@@ -1556,6 +1953,19 @@ function App(){
         <button className="fab" onClick={()=>setEventSheet({event:null})} aria-label="Log an entry"><Icon d={ICONS.plus} size={26}/></button>}
       {!inSettings && tab==="remind" && activeHome && (store.data.reminders||[]).some(r=>r.home_id===activeHome.id) &&
         <button className="fab" onClick={()=>setRemSheet({reminder:null, preset:null})} aria-label="Add reminder"><Icon d={ICONS.plus} size={26}/></button>}
+      {!inSettings && tab==="docs" && activeHome && (store.data.documents||[]).some(d=>d.home_id===activeHome.id) &&
+        <button className="fab" onClick={()=>setImportOpen(true)} aria-label="Add documents"><Icon d={ICONS.plus} size={26}/></button>}
+
+      <input ref={docFileRef} type="file" accept="application/pdf,image/*" multiple style={{display:"none"}} onChange={onDocFiles} />
+      {docBusy && <div className="toast">{docBusy}</div>}
+
+      {importOpen && activeHome &&
+        <ImportSheet
+          showDropbox={!!DROPBOX_APP_KEY}
+          onDevice={()=>{ setImportOpen(false); pickDocuments(); }}
+          onDropbox={()=>chooseDropbox(activeHome.id)}
+          onLink={(url,name)=>importLink(url, name, activeHome.id)}
+          onClose={()=>setImportOpen(false)} />}
 
       {!inSettings &&
         <nav className="nav">
@@ -1576,6 +1986,9 @@ function App(){
       {remSheet && activeHome &&
         <ReminderSheet reminder={remSheet.reminder} preset={remSheet.preset} homeId={activeHome.id}
           onSave={saveReminder} onDelete={deleteReminder} onClose={()=>setRemSheet(null)} />}
+
+      {docSheet &&
+        <DocSheet doc={docSheet.doc} onSave={saveDoc} onDelete={deleteDoc} onOpen={openDoc} onClose={()=>setDocSheet(null)} />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>
