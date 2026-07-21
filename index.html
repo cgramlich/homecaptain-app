@@ -256,9 +256,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.7.0";
+const APP_VERSION = "0.7.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-20.3";
+const BUILD = "2026-07-20.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -499,6 +499,8 @@ async function propertyLookup(address){
     const t = await r.json().catch(()=>({}));
     if(r.status===503) throw new Error(t.detail || "Address lookup isn't set up yet.");
     if(r.status===429) throw new Error(t.detail || "Address lookups are at this month's limit.");
+    // 422 = the address itself was incomplete (user fixable), not a system fault.
+    if(r.status===422) throw new Error(t.detail || "That address needs a city and state or ZIP.");
     throw new Error(t.detail || ("Lookup failed ("+r.status+")."));
   }
   return (await r.json()).property;   // normalized fields, or null if no record
@@ -915,12 +917,76 @@ function AuthScreen(){
   );
 }
 
+/* ---- address parts ----
+   Stored as ONE `address` string (what existing homes already have, and what
+   the lookup sends), but EDITED as separate fields so nobody can leave off the
+   city and state - which is the one thing the property lookup can't work
+   without. splitAddress reverses an existing string back into parts. */
+function splitAddress(full){
+  const s = String(full||"").trim();
+  const out = { street:"", city:"", state:"", zip:"" };
+  if(!s) return out;
+  const parts = s.split(",").map(x=>x.trim()).filter(Boolean);
+  const tail = (t) => {
+    // "TX 78701" | "TX" | "78701" | "Texas 78701"
+    const m = String(t||"").trim().match(/^(.*?)[\s,]*(\d{5}(?:-\d{4})?)$/);
+    if(m){ return { state:(m[1]||"").trim(), zip:m[2] }; }
+    return { state:String(t||"").trim(), zip:"" };
+  };
+  if(parts.length === 1){
+    // No commas. A trailing ZIP is unambiguous, and a 2-letter token right
+    // before it is a state. Where the STREET ends and the CITY begins is not
+    // knowable ("123 Main St San Antonio TX"), so we never guess the city -
+    // the remainder stays in street for the user to adjust. The state is only
+    // taken when a ZIP confirms it, otherwise "123 Main St" would read as
+    // state "ST".
+    let rest = parts[0];
+    const z = rest.match(/\s(\d{5}(?:-\d{4})?)$/);
+    if(z){
+      out.zip = z[1];
+      rest = rest.slice(0, z.index).trim();
+      const st = rest.match(/\s([A-Za-z]{2})$/);
+      if(st){ out.state = st[1].toUpperCase(); rest = rest.slice(0, st.index).trim(); }
+    }
+    out.street = rest;
+    return out;
+  }
+  if(parts.length === 2){
+    out.street = parts[0];
+    const m = parts[1].match(/^(.*?)\s+([A-Za-z]{2})\s*(\d{5}(?:-\d{4})?)?$/);
+    if(m){ out.city=m[1].trim(); out.state=m[2].toUpperCase(); out.zip=m[3]||""; }
+    else out.city = parts[1];
+    return out;
+  }
+  out.street = parts.slice(0, parts.length-2).join(", ");
+  out.city   = parts[parts.length-2];
+  const t = tail(parts[parts.length-1]);
+  out.state = t.state.length===2 ? t.state.toUpperCase() : t.state;
+  out.zip   = t.zip;
+  return out;
+}
+function joinAddress(a){
+  const street=(a.street||"").trim(), city=(a.city||"").trim();
+  const st=(a.state||"").trim(), zip=(a.zip||"").trim();
+  const last = [st, zip].filter(Boolean).join(" ");
+  return [street, city, last].filter(Boolean).join(", ");
+}
+
 /* ============================================================
    HOME EDITOR SHEET
    ============================================================ */
 function HomeSheet({ home, onSave, onDelete, onClose }){
   const [name, setName] = useState(home ? home.name : "");
-  const [address, setAddress] = useState(home ? (home.address||"") : "");
+  const init = splitAddress(home ? (home.address||"") : "");
+  const [street, setStreet] = useState(init.street);
+  const [city, setCity]     = useState(init.city);
+  const [stateAbbr, setStateAbbr] = useState(init.state);
+  const [zip, setZip]       = useState(init.zip);
+  const address = joinAddress({ street, city, state:stateAbbr, zip });
+  const setAddress = (full) => {
+    const p = splitAddress(full);
+    setStreet(p.street); setCity(p.city); setStateAbbr(p.state); setZip(p.zip);
+  };
   const [type, setType] = useState(home ? (home.type||"House") : "House");
   const [purchaseDate, setPurchaseDate] = useState(home ? (home.purchaseDate||"") : "");
   const [notes, setNotes] = useState(home ? (home.notes||"") : "");
@@ -946,7 +1012,12 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
   };
 
   const handleLookup = async () => {
-    if(address.trim().length < 6){ setAssist("Enter the street, city, and state first."); return; }
+    // Check the parts BEFORE spending a metered lookup: the provider can't
+    // geolocate a bare street, and a rejected call is a wasted round trip.
+    if(!street.trim()){ setAssist("Enter the street address first."); return; }
+    if(!city.trim() || !(stateAbbr.trim() || zip.trim())){
+      setAssist("Add the city and state (or ZIP) so the lookup can find it."); return;
+    }
     setBusy("lookup"); setAssist("");
     try { applyProperty(await propertyLookup(address.trim())); }
     catch(e){ setAssist(e.message || "Lookup failed."); }
@@ -1009,13 +1080,19 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
         </div>
 
         <div className="field">
-          <label className="label">Address</label>
-          <div className="row" style={{gap:8}}>
-            <input className="input" style={{flex:1,minWidth:0}} value={address} onChange={e=>setAddress(e.target.value)} placeholder="Street, city, state" />
-            <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto",width:"auto",whiteSpace:"nowrap"}} onClick={handleLookup} disabled={busy!==""}>
-              {busy==="lookup" ? <span className="spin"></span> : "Look up"}
-            </button>
+          <label className="label">Street</label>
+          <input className="input" value={street} onChange={e=>setStreet(e.target.value)} placeholder="656 River Way" />
+          <div className="row" style={{gap:8, marginTop:8}}>
+            <input className="input" style={{flex:"1 1 auto",minWidth:0}} value={city}
+              onChange={e=>setCity(e.target.value)} placeholder="City" aria-label="City" />
+            <input className="input" style={{flex:"0 0 68px",minWidth:0,textTransform:"uppercase"}} value={stateAbbr}
+              onChange={e=>setStateAbbr(e.target.value.toUpperCase().slice(0,2))} placeholder="ST" maxLength={2} aria-label="State" />
+            <input className="input" style={{flex:"0 0 92px",minWidth:0}} value={zip} inputMode="numeric"
+              onChange={e=>setZip(e.target.value.replace(/[^\d-]/g,"").slice(0,10))} placeholder="ZIP" aria-label="ZIP code" />
           </div>
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={handleLookup} disabled={busy!==""}>
+            {busy==="lookup" ? <span className="spin"></span> : "Look up"}
+          </button>
           <button className="assist-toggle" onClick={()=>setShowListing(s=>!s)}>
             {showListing ? "Hide listing paste" : "...or paste a listing to auto-fill"}
           </button>
