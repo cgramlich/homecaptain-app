@@ -256,9 +256,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.7.3";
+const APP_VERSION = "0.7.4";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-20.6";
+const BUILD = "2026-07-20.7";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -665,6 +665,14 @@ function humanSize(b){
 }
 const DOC_MAX_BYTES = 20 * 1024 * 1024;   // 20 MB/file cap; keeps JSON POST bodies sane
 function isPdfName(n){ return /\.pdf$/i.test(String(n||"")); }
+// The Files picker allows any type, so label honestly rather than assuming
+// "anything that isn't a PDF must be an image".
+function fileKind(path, mime){
+  const p = String(path||""), m = String(mime||"");
+  if(isPdfName(p) || m === "application/pdf") return "PDF";
+  if(/\.(jpe?g|png|gif|webp|heic|heif|bmp|tiff?)$/i.test(p) || m.indexOf("image/")===0) return "Image";
+  return "File";
+}
 
 // Derive a filename from a URL when the user doesn't type one.
 function nameFromUrl(u){
@@ -1586,7 +1594,7 @@ async function openStoredFile(path, onErr){
   }
 }
 
-function ImportSheet({ homes, homeId, onHome, showDropbox, onDevice, onDropbox, onLink, onClose }){
+function ImportSheet({ homes, homeId, onHome, showDropbox, onFiles, onPhotos, onDropbox, onLink, onClose }){
   const [mode, setMode] = useState("menu");   // menu | link
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
@@ -1617,7 +1625,8 @@ function ImportSheet({ homes, homeId, onHome, showDropbox, onDevice, onDropbox, 
 
         {mode==="menu" ? (
           <div style={{display:"flex", flexDirection:"column", gap:10}}>
-            <button className="btn btn-ghost btn-block" onClick={onDevice}><Icon d={ICONS.upload} size={17}/> This device</button>
+            <button className="btn btn-ghost btn-block" onClick={onFiles}><Icon d={ICONS.file} size={17}/> Files (iCloud, Dropbox, Box)</button>
+            <button className="btn btn-ghost btn-block" onClick={onPhotos}><Icon d={ICONS.camera} size={17}/> Photos</button>
             {showDropbox &&
               <button className="btn btn-ghost btn-block" onClick={onDropbox}><Icon d={ICONS.file} size={17}/> Dropbox</button>}
             <button className="btn btn-ghost btn-block" onClick={()=>setMode("link")}><Icon d={ICONS.external} size={17}/> From a link</button>
@@ -1673,7 +1682,7 @@ function DocSheet({ doc, onSave, onDelete, onClose, onOpen }){
         </div>
 
         <button className="btn btn-ghost btn-block" style={{marginBottom:16}} onClick={()=>onOpen(doc)}>
-          <Icon d={ICONS.external} size={17}/> Open {isPdfName(doc.path) ? "PDF" : "file"}
+          <Icon d={ICONS.external} size={17}/> Open {fileKind(doc.path, doc.mime) === "PDF" ? "PDF" : "file"}
         </button>
 
         <div className="title-field">
@@ -1716,7 +1725,7 @@ function DocRow({ d, onEdit, onOpen }){
       <button className="rem-body" onClick={()=>onOpen(d)}>
         <div className="item-title">{d.name}</div>
         <div className="item-meta">
-          <span className="chip">{isPdfName(d.path) ? "PDF" : "Image"}</span>
+          <span className="chip">{fileKind(d.path, d.mime)}</span>
           {d.size ? <span className="chip">{humanSize(d.size)}</span> : null}
           {d.createdAt ? <span className="chip">{fmtDate(d.createdAt)}</span> : null}
         </div>
@@ -1788,6 +1797,7 @@ function App(){
   const [importOpen, setImportOpen] = useState(false);
   const [importHomeId, setImportHomeId] = useState(null);
   const docFileRef = useRef(null);
+  const docPhotoRef = useRef(null);
   // The device picker fires its onChange long after the sheet closes, so the
   // chosen home rides in a ref rather than relying on closure timing.
   const importHomeRef = useRef(null);
@@ -1920,7 +1930,10 @@ function App(){
       : (skipped ? "Nothing added (" + skipped + " skipped)" : "Nothing added");
     showToast(msg);
   };
-  const pickDocuments = () => { if(docFileRef.current) docFileRef.current.click(); };
+  const pickDocuments = (kind) => {
+    const ref = kind === "photos" ? docPhotoRef : docFileRef;
+    if(ref.current) ref.current.click();
+  };
   const onDocFiles = (e) => {
     const files = e.target.files;
     e.target.value = "";
@@ -2085,7 +2098,12 @@ function App(){
       {!inSettings && tab==="docs" && activeHome && (store.data.documents||[]).some(d=>d.home_id===activeHome.id) &&
         <button className="fab" onClick={openImport} aria-label="Add documents"><Icon d={ICONS.plus} size={26}/></button>}
 
-      <input ref={docFileRef} type="file" accept="application/pdf,image/*" multiple style={{display:"none"}} onChange={onDocFiles} />
+      {/* Two inputs on purpose. iOS only shows the Photo Library / Take Photo /
+          Choose File action sheet when the input ACCEPTS images; with no accept
+          it opens the Files browser directly, which is where Dropbox, iCloud and
+          Box appear. So the cloud path gets its own input to skip that hop. */}
+      <input ref={docFileRef} type="file" multiple style={{display:"none"}} onChange={onDocFiles} />
+      <input ref={docPhotoRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={onDocFiles} />
       {docBusy && <div className="toast">{docBusy}</div>}
 
       {importOpen && activeHome &&
@@ -2094,7 +2112,8 @@ function App(){
           homeId={importHomeId || activeHome.id}
           onHome={pickImportHome}
           showDropbox={!!DROPBOX_APP_KEY}
-          onDevice={()=>{ setImportOpen(false); pickDocuments(); }}
+          onFiles={()=>{ setImportOpen(false); pickDocuments("files"); }}
+          onPhotos={()=>{ setImportOpen(false); pickDocuments("photos"); }}
           onDropbox={()=>chooseDropbox(importHomeId || activeHome.id)}
           onLink={(url,name)=>importLink(url, name, importHomeId || activeHome.id)}
           onClose={()=>setImportOpen(false)} />}
