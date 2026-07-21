@@ -256,9 +256,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.7.2";
+const APP_VERSION = "0.7.3";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-20.5";
+const BUILD = "2026-07-20.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1586,11 +1586,13 @@ async function openStoredFile(path, onErr){
   }
 }
 
-function ImportSheet({ showDropbox, onDevice, onDropbox, onLink, onClose }){
+function ImportSheet({ homes, homeId, onHome, showDropbox, onDevice, onDropbox, onLink, onClose }){
   const [mode, setMode] = useState("menu");   // menu | link
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const submitLink = () => { const u = url.trim(); if(!u) return; onLink(u, name.trim()); };
+  const list = homes || [];
+  const target = list.find(h => h.id === homeId) || null;
   return (
     <>
       <div className="scrim" onClick={onClose}></div>
@@ -1600,6 +1602,19 @@ function ImportSheet({ showDropbox, onDevice, onDropbox, onLink, onClose }){
           <h2 className="sheet-title">{mode==="link" ? "Import from a link" : "Add documents"}</h2>
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
+
+        {/* Always say WHICH home these files land on. With more than one home,
+            make it selectable here so the wrong house is never a silent mistake. */}
+        <div className="field">
+          <label className="label">{list.length > 1 ? "Add to which home" : "Adding to"}</label>
+          {list.length > 1
+            ? <div className="pills">
+                {list.map(h =>
+                  <button key={h.id} className={"pill "+(h.id===homeId?"on":"")} onClick={()=>onHome(h.id)}>{h.name}</button>)}
+              </div>
+            : <div className="chip amber">{target ? target.name : "This home"}</div>}
+        </div>
+
         {mode==="menu" ? (
           <div style={{display:"flex", flexDirection:"column", gap:10}}>
             <button className="btn btn-ghost btn-block" onClick={onDevice}><Icon d={ICONS.upload} size={17}/> This device</button>
@@ -1771,7 +1786,11 @@ function App(){
   const [docSheet, setDocSheet] = useState(null);       // null | {doc}
   const [docBusy, setDocBusy] = useState("");           // "" | "Adding 3 of 16..."
   const [importOpen, setImportOpen] = useState(false);
+  const [importHomeId, setImportHomeId] = useState(null);
   const docFileRef = useRef(null);
+  // The device picker fires its onChange long after the sheet closes, so the
+  // chosen home rides in a ref rather than relying on closure timing.
+  const importHomeRef = useRef(null);
 
   // Preload the Dropbox Chooser (if configured) so choose() runs inside the
   // click gesture instead of after an async load, which browsers would block.
@@ -1906,9 +1925,19 @@ function App(){
     const files = e.target.files;
     e.target.value = "";
     const homes = store.data.homes || [];
-    const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
-    if(ah) addDocuments(files, ah.id);
+    const fallback = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
+    const targetId = importHomeRef.current || (fallback ? fallback.id : null);
+    if(targetId) addDocuments(files, targetId);
   };
+  // Open the import sheet aimed at the currently active home.
+  const openImport = () => {
+    const homes = store.data.homes || [];
+    const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
+    const id = ah ? ah.id : null;
+    setImportHomeId(id); importHomeRef.current = id;
+    setImportOpen(true);
+  };
+  const pickImportHome = (id) => { setImportHomeId(id); importHomeRef.current = id; };
   // Shared by Dropbox + link import: the backend fetches each URL and stores it.
   const addFromUrls = async (items, homeId) => {
     if(!items.length) return;
@@ -2036,7 +2065,7 @@ function App(){
                 ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})} />
                 : <ComingSoon glyph="HC" title="Add a home first" blurb="The log is organized by property. Add a home to start." />)}
               {tab==="docs" && (activeHome
-                ? <DocsScreen store={store} home={activeHome} onAdd={()=>setImportOpen(true)} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} />
+                ? <DocsScreen store={store} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} />
                 : <ComingSoon glyph="HC" title="Add a home first" blurb="Documents are organized by property. Add a home to start." />)}
               {tab==="remind" && (activeHome
                 ? <RemindersScreen store={store} home={activeHome}
@@ -2054,17 +2083,20 @@ function App(){
       {!inSettings && tab==="remind" && activeHome && (store.data.reminders||[]).some(r=>r.home_id===activeHome.id) &&
         <button className="fab" onClick={()=>setRemSheet({reminder:null, preset:null})} aria-label="Add reminder"><Icon d={ICONS.plus} size={26}/></button>}
       {!inSettings && tab==="docs" && activeHome && (store.data.documents||[]).some(d=>d.home_id===activeHome.id) &&
-        <button className="fab" onClick={()=>setImportOpen(true)} aria-label="Add documents"><Icon d={ICONS.plus} size={26}/></button>}
+        <button className="fab" onClick={openImport} aria-label="Add documents"><Icon d={ICONS.plus} size={26}/></button>}
 
       <input ref={docFileRef} type="file" accept="application/pdf,image/*" multiple style={{display:"none"}} onChange={onDocFiles} />
       {docBusy && <div className="toast">{docBusy}</div>}
 
       {importOpen && activeHome &&
         <ImportSheet
+          homes={store.data.homes||[]}
+          homeId={importHomeId || activeHome.id}
+          onHome={pickImportHome}
           showDropbox={!!DROPBOX_APP_KEY}
           onDevice={()=>{ setImportOpen(false); pickDocuments(); }}
-          onDropbox={()=>chooseDropbox(activeHome.id)}
-          onLink={(url,name)=>importLink(url, name, activeHome.id)}
+          onDropbox={()=>chooseDropbox(importHomeId || activeHome.id)}
+          onLink={(url,name)=>importLink(url, name, importHomeId || activeHome.id)}
           onClose={()=>setImportOpen(false)} />}
 
       {!inSettings &&
