@@ -269,9 +269,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.8.0";
+const APP_VERSION = "0.8.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-22.1";
+const BUILD = "2026-07-23.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -734,6 +734,26 @@ function fileKind(path, mime){
   if(isPdfName(p) || m === "application/pdf") return "PDF";
   if(/\.(jpe?g|png|gif|webp|heic|heif|bmp|tiff?)$/i.test(p) || m.indexOf("image/")===0) return "Image";
   return "File";
+}
+
+// Dedupe key for "is this the same document I already imported": the display
+// name (case-folded), which every doc has regardless of when it was imported.
+function docNameKey(nameOrDoc){
+  const s = typeof nameOrDoc === "string" ? stripExt(nameOrDoc) : (nameOrDoc.name || "");
+  return String(s).trim().toLowerCase();
+}
+// Decide what to do with an incoming file against the home's existing docs so
+// re-selecting a whole folder only pulls in new or changed files:
+//   "add"     - not seen before
+//   "skip"    - same name AND same size -> already have it, unchanged
+//   "replace" - same name, different size -> a revision; swap the file in place
+// keeping the existing record's id, category, and note.
+function classifyIncoming(existingDocs, homeId, name, size){
+  const key = docNameKey(name);
+  const match = (existingDocs||[]).find(d => d.home_id===homeId && docNameKey(d) === key);
+  if(!match) return { action:"add" };
+  if(Number(match.size||0) === Number(size||0)) return { action:"skip" };
+  return { action:"replace", doc: match };
 }
 
 // Derive a filename from a URL when the user doesn't type one.
@@ -2049,33 +2069,55 @@ function App(){
   const addDocuments = async (fileList, homeId) => {
     const files = Array.from(fileList || []);
     if(!files.length) return;
+    // Snapshot existing docs so re-selecting the whole folder dedupes against
+    // what's already here. We track adds + replacements against this base and
+    // save once at the end.
+    const base = store.data.documents || [];
     const added = [];
-    let skipped = 0;
+    const replacements = {};     // docId -> updated record
+    const oldPathsToDelete = [];
+    let skipped = 0, unchanged = 0, revised = 0;
     for(let i=0; i<files.length; i++){
       const f = files[i];
       setDocBusy("Adding " + (i+1) + " of " + files.length + "…");
       if(f.size > DOC_MAX_BYTES){ skipped++; log("DOC","skipped oversize "+f.name+" ("+humanSize(f.size)+")"); continue; }
+      const verdict = classifyIncoming(base, homeId, f.name, f.size);
+      if(verdict.action === "skip"){ unchanged++; continue; }
       try{
         const dataUrl = await fileToDataURL(f);
-        const docId = uid();
-        const path = "documents/" + docId + "/" + safeName(f.name);
+        const docId = verdict.action === "replace" ? verdict.doc.id : uid();
+        const path = "documents/" + docId + "/" + Date.now().toString(36) + "-" + safeName(f.name);
         await uploadFile(path, dataUrl);
-        added.push({
-          id: docId, home_id: homeId,
-          name: stripExt(f.name), category: classifyDoc(f.name),
-          path, size: f.size, mime: f.type || (isPdfName(f.name) ? "application/pdf" : ""),
-          note: "", createdAt: nowISO(), updatedAt: nowISO(),
-        });
+        if(verdict.action === "replace"){
+          // Keep the record (category, note, applied facts stay), swap the file,
+          // and clear the cached AI read since the content changed.
+          if(verdict.doc.path && verdict.doc.path !== path) oldPathsToDelete.push(verdict.doc.path);
+          replacements[docId] = { ...verdict.doc, path, size: f.size,
+            mime: f.type || (isPdfName(f.name) ? "application/pdf" : ""),
+            sourceName: f.name, extracted: undefined, updatedAt: nowISO() };
+          revised++;
+        } else {
+          added.push({
+            id: docId, home_id: homeId,
+            name: stripExt(f.name), category: classifyDoc(f.name),
+            path, size: f.size, mime: f.type || (isPdfName(f.name) ? "application/pdf" : ""),
+            sourceName: f.name, note: "", createdAt: nowISO(), updatedAt: nowISO(),
+          });
+        }
       }catch(e){ skipped++; log("ERROR","addDocuments "+f.name+": "+e.message); }
     }
     setDocBusy("");
-    if(added.length){
-      store.saveCollection("documents", [...added, ...(store.data.documents||[])]);
+    if(added.length || Object.keys(replacements).length){
+      const merged = base.map(d => replacements[d.id] || d);
+      store.saveCollection("documents", [...added, ...merged]);
+      oldPathsToDelete.forEach(p => deleteFile(p));   // best-effort storage cleanup
     }
-    const msg = added.length
-      ? added.length + " added" + (skipped ? ", " + skipped + " skipped" : "")
-      : (skipped ? "Nothing added (" + skipped + " skipped)" : "Nothing added");
-    showToast(msg);
+    const parts = [];
+    if(added.length) parts.push(added.length + " added");
+    if(revised) parts.push(revised + " updated");
+    if(unchanged) parts.push(unchanged + " unchanged");
+    if(skipped) parts.push(skipped + " skipped");
+    showToast(parts.length ? parts.join(", ") : "Nothing added");
   };
   const pickDocuments = (kind) => {
     const ref = kind === "photos" ? docPhotoRef : docFileRef;
@@ -2113,7 +2155,7 @@ function App(){
           id: docId, home_id: homeId,
           name: stripExt(it.name), category: classifyDoc(it.name),
           path, size: (res && res.size) || it.bytes || 0, mime: (res && res.content_type) || "",
-          note: "", createdAt: nowISO(), updatedAt: nowISO(),
+          sourceName: it.name, note: "", createdAt: nowISO(), updatedAt: nowISO(),
         });
       }catch(e){ failed++; log("ERROR","import "+it.name+": "+e.message);
         if(items.length===1) showToast(e.message); }
