@@ -288,9 +288,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.9.3";
+const APP_VERSION = "0.9.4";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-23.5";
+const BUILD = "2026-07-23.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -930,6 +930,28 @@ function useStore(){
     window.addEventListener("offline", goOffline);
     return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
   }, [flush]);
+
+  // ---- refresh data on RESUME ----
+  // pullAll otherwise runs only on cold launch / sign-in, so a device left open
+  // in the background never sees changes made on another device (import docs on
+  // a laptop -> they don't appear on the phone until it's fully relaunched).
+  // On resume we push any pending local edits FIRST, then pull, so a refresh
+  // can't clobber unsynced changes. Debounced so quick tab-switches don't thrash.
+  useEffect(() => {
+    let lastPull = Date.now();          // mount already pulled
+    const MIN_GAP = 30 * 1000;
+    const maybePull = async () => {
+      if(!authedRef.current || !navigator.onLine) return;
+      const now = Date.now();
+      if(now - lastPull < MIN_GAP) return;
+      lastPull = now;
+      await flush();
+      await pullAll();
+    };
+    const onVis = () => { if(document.visibilityState === "visible") maybePull(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [flush, pullAll]);
 
   return { data, cfg, sync, syncMsg, online, authed, authEmail, authReady,
            saveCollection, saveCfg, pullAll, flush };
