@@ -160,6 +160,25 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .item.overdue{border-color:#d1735c55;}
 .item.muted{opacity:.55;}
 .item.muted .item-title{text-decoration:line-through;}
+/* home hub (overview) */
+.hub-name{font-size:27px;line-height:1.08;margin:2px 0 4px;}
+.hub-sub{color:var(--ink-3);font-size:13.5px;margin-bottom:14px;line-height:1.4;}
+.wx{display:flex;align-items:center;gap:13px;background:var(--bg-3);border:1px solid var(--line-2);border-radius:var(--radius);padding:12px 15px;margin:2px 0 16px;}
+.wx-emoji{font-size:27px;line-height:1;}
+.wx-meta{flex:1;min-width:0;}
+.wx-cond{font-size:14px;font-weight:600;}
+.wx-hilo{font-size:12px;color:var(--ink-3);margin-top:2px;}
+.wx-temp{font-size:27px;font-weight:600;line-height:1;}
+.hub-cards{display:flex;flex-direction:column;gap:10px;margin-top:8px;}
+.hub-card{display:flex;align-items:center;gap:13px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius);padding:14px 15px;text-align:left;width:100%;transition:.15s;}
+.hub-card:active{border-color:var(--amber-line);background:var(--bg-3);}
+.hub-card-ic{width:38px;height:38px;border-radius:11px;background:var(--bg-4);display:flex;align-items:center;justify-content:center;color:var(--amber);flex:none;}
+.hub-card-body{flex:1;min-width:0;}
+.hub-card-title{display:block;font-size:15px;font-weight:600;}
+.hub-card-sub{display:block;font-size:12.5px;color:var(--ink-3);margin-top:2px;}
+.hub-card-chev{color:var(--ink-3);flex:none;}
+.backbtn{flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:var(--bg-3);border:1px solid var(--line-2);display:inline-flex;align-items:center;justify-content:center;color:var(--ink);}
+.home-card-chev{color:var(--ink-3);flex:none;align-self:center;}
 .photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin:2px 0 16px;}
 .thumb{position:relative;aspect-ratio:1;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--line-2);background:var(--bg-3);}
 .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -269,9 +288,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.8.1";
+const APP_VERSION = "0.9.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-23.1";
+const BUILD = "2026-07-23.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -934,6 +953,7 @@ const ICONS = {
   file:    ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z","M14 2v6h6"],
   external:["M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6","M15 3h6v6","M10 14L21 3"],
   upload:  ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M17 8l-5-5-5 5","M12 3v12"],
+  chev:    ["M9 18l6-6-6-6"],
   eye:     ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
   eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
 };
@@ -1261,7 +1281,7 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
 /* ============================================================
    SCREENS
    ============================================================ */
-function HomesScreen({ store, onAdd, onEdit }){
+function HomesScreen({ store, onAdd, onEnter }){
   const homes = store.data.homes || [];
   if(!homes.length){
     return (
@@ -1278,19 +1298,18 @@ function HomesScreen({ store, onAdd, onEdit }){
   return (
     <div className="list">
       {homes.map(h => (
-        <button key={h.id} className="item" onClick={()=>onEdit(h)}>
+        <button key={h.id} className="item" onClick={()=>onEnter(h)}>
           <div className="item-body">
             <div className="item-title">{h.name}</div>
             <div className="item-meta">
               {h.type && <span className="chip">{h.type}</span>}
               {h.address && <span className="chip">{h.address}</span>}
-              {h.purchaseDate && <span className="chip">Since {fmtDate(h.purchaseDate)}</span>}
               {h.facts && (h.facts.bedrooms!=null || h.facts.bathrooms!=null) &&
                 <span className="chip amber">{[h.facts.bedrooms!=null?h.facts.bedrooms+" bd":null, h.facts.bathrooms!=null?h.facts.bathrooms+" ba":null].filter(Boolean).join(" · ")}</span>}
               {h.facts && h.facts.squareFootage!=null && <span className="chip amber">{fmtNum(h.facts.squareFootage)} sqft</span>}
-              {h.facts && h.facts.yearBuilt!=null && <span className="chip">Built {h.facts.yearBuilt}</span>}
             </div>
           </div>
+          <span className="home-card-chev"><Icon d={ICONS.chev} size={20}/></span>
         </button>
       ))}
     </div>
@@ -1944,18 +1963,194 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen }){
 }
 
 /* ============================================================
+   WEATHER (Open-Meteo, no key, CORS-friendly). Shown on a home's overview.
+   Uses the property's stored coordinates when the address lookup captured them,
+   otherwise geocodes the city + state. Cached per home for 30 min.
+   ============================================================ */
+const WX_CODES = {
+  0:["Clear","☀️"], 1:["Mostly clear","🌤️"], 2:["Partly cloudy","⛅"],
+  3:["Cloudy","☁️"], 45:["Fog","🌫️"], 48:["Fog","🌫️"],
+  51:["Light drizzle","🌦️"], 53:["Drizzle","🌦️"], 55:["Drizzle","🌦️"],
+  61:["Light rain","🌧️"], 63:["Rain","🌧️"], 65:["Heavy rain","🌧️"],
+  66:["Freezing rain","🌧️"], 67:["Freezing rain","🌧️"],
+  71:["Light snow","🌨️"], 73:["Snow","🌨️"], 75:["Heavy snow","❄️"], 77:["Snow","🌨️"],
+  80:["Showers","🌦️"], 81:["Showers","🌧️"], 82:["Heavy showers","⛈️"],
+  85:["Snow showers","🌨️"], 86:["Snow showers","❄️"],
+  95:["Thunderstorm","⛈️"], 96:["Thunderstorm","⛈️"], 99:["Thunderstorm","⛈️"],
+};
+function wxLabel(code){ return WX_CODES[code] || ["Now","🌡️"]; }
+
+// US state abbreviation -> full name, so a 2-letter state can be matched against
+// Open-Meteo's full admin1 name ("TX" vs "Texas"). Without this, a small town
+// that isn't the first geocoder result could resolve to the wrong state.
+const US_STATES = {AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",
+  CO:"Colorado",CT:"Connecticut",DE:"Delaware",FL:"Florida",GA:"Georgia",HI:"Hawaii",
+  ID:"Idaho",IL:"Illinois",IN:"Indiana",IA:"Iowa",KS:"Kansas",KY:"Kentucky",LA:"Louisiana",
+  ME:"Maine",MD:"Maryland",MA:"Massachusetts",MI:"Michigan",MN:"Minnesota",MS:"Mississippi",
+  MO:"Missouri",MT:"Montana",NE:"Nebraska",NV:"Nevada",NH:"New Hampshire",NJ:"New Jersey",
+  NM:"New Mexico",NY:"New York",NC:"North Carolina",ND:"North Dakota",OH:"Ohio",OK:"Oklahoma",
+  OR:"Oregon",PA:"Pennsylvania",RI:"Rhode Island",SC:"South Carolina",SD:"South Dakota",
+  TN:"Tennessee",TX:"Texas",UT:"Utah",VT:"Vermont",VA:"Virginia",WA:"Washington",
+  WV:"West Virginia",WI:"Wisconsin",WY:"Wyoming",DC:"District of Columbia"};
+
+// Resolve coordinates for a home's address parts. ZIP first (unambiguous for a
+// US address, and it works for small unincorporated towns the city geocoder may
+// place in the wrong state), then city + state via Open-Meteo with a proper
+// state-name match.
+async function resolveCoords(parts){
+  const zip = String(parts.zip||"").match(/^\d{5}/);
+  if(zip){
+    try{
+      const z = await fetch("https://api.zippopotam.us/us/" + zip[0]);
+      if(z.ok){
+        const p = ((await z.json()).places || [])[0];
+        if(p && p.latitude) return { lat: +p.latitude, lon: +p.longitude };
+      }
+    }catch(e){ /* fall through to city */ }
+  }
+  if(parts.city){
+    try{
+      const r = await fetch("https://geocoding-api.open-meteo.com/v1/search?name=" +
+        encodeURIComponent(parts.city) + "&count=5&country=US&language=en&format=json");
+      if(r.ok){
+        const list = ((await r.json()) || {}).results || [];
+        if(list.length){
+          const full = (US_STATES[String(parts.state||"").trim().toUpperCase()] || "").toUpperCase();
+          const byState = full ? list.find(x => String(x.admin1||"").toUpperCase() === full) : null;
+          const pick = byState || list[0];
+          return { lat: pick.latitude, lon: pick.longitude };
+        }
+      }
+    }catch(e){ /* fall through */ }
+  }
+  return null;
+}
+
+function WeatherStrip({ home }){
+  const [wx, setWx] = useState(null);      // null=loading | "none" | {temp,code,hi,lo}
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const ck = "wx:" + home.id;
+      const cached = lsGet(ck, null);
+      if(cached && cached.at && (Date.now() - cached.at) < 30*60*1000){ setWx(cached); return; }
+      try{
+        let lat = home.facts && home.facts.latitude;
+        let lon = home.facts && home.facts.longitude;
+        if(lat==null || lon==null){
+          const parts = splitAddress(home.address || "");
+          if(!parts.zip && !parts.city){ if(alive) setWx("none"); return; }
+          const g = await resolveCoords(parts);
+          if(!g){ if(alive) setWx("none"); return; }
+          lat = g.lat; lon = g.lon;
+        }
+        const r = await fetch("https://api.open-meteo.com/v1/forecast?latitude=" + lat + "&longitude=" + lon +
+          "&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min" +
+          "&temperature_unit=fahrenheit&timezone=auto&forecast_days=1");
+        if(!r.ok) throw new Error("wx " + r.status);
+        const j = await r.json();
+        const cur = j.current || {}, daily = j.daily || {};
+        const out = { at: Date.now(),
+          temp: Math.round(cur.temperature_2m), code: cur.weather_code,
+          hi: (daily.temperature_2m_max||[])[0]!=null ? Math.round(daily.temperature_2m_max[0]) : null,
+          lo: (daily.temperature_2m_min||[])[0]!=null ? Math.round(daily.temperature_2m_min[0]) : null };
+        if(!alive) return;
+        setWx(out); lsSet(ck, out);
+      }catch(e){ if(alive) setWx("none"); log("WX","fail: " + e.message); }
+    })();
+    return () => { alive = false; };
+  }, [home.id]);
+
+  if(!wx || wx==="none") return null;      // silent while loading or unavailable
+  const [label, emoji] = wxLabel(wx.code);
+  return (
+    <div className="wx">
+      <span className="wx-emoji">{emoji}</span>
+      <div className="wx-meta">
+        <div className="wx-cond">{label}</div>
+        {(wx.hi!=null && wx.lo!=null) && <div className="wx-hilo">H {wx.hi}° · L {wx.lo}°</div>}
+      </div>
+      <div className="wx-temp">{isNaN(wx.temp) ? "" : wx.temp + "°"}</div>
+    </div>
+  );
+}
+
+/* ============================================================
+   HOME OVERVIEW (the hub you land on when you enter a house)
+   ============================================================ */
+function HubCard({ icon, title, sub, onClick }){
+  return (
+    <button className="hub-card" onClick={onClick}>
+      <span className="hub-card-ic"><Icon d={icon} size={19}/></span>
+      <span className="hub-card-body">
+        <span className="hub-card-title">{title}</span>
+        <span className="hub-card-sub">{sub}</span>
+      </span>
+      <span className="hub-card-chev"><Icon d={ICONS.chev} size={18}/></span>
+    </button>
+  );
+}
+
+function HomeOverview({ store, home, onEdit, onGoto }){
+  const docs   = (store.data.documents||[]).filter(d => d.home_id === home.id);
+  const events = (store.data.events||[]).filter(e => e.home_id === home.id);
+  const rems   = (store.data.reminders||[]).filter(r => r.home_id === home.id && !r.doneAt);
+  const overdue = rems.filter(r => remStatus(r) === "overdue").length;
+  const dueSoon = rems.filter(r => { const s = remStatus(r); return s==="today" || s==="soon"; }).length;
+  const spend  = events.reduce((s,e) => s + (Number(e.cost)||0), 0);
+  const cf = home.facts || {};
+
+  const chips = [];
+  if(cf.bedrooms!=null || cf.bathrooms!=null)
+    chips.push(<span className="chip amber" key="bd">{[cf.bedrooms!=null?cf.bedrooms+" bd":null, cf.bathrooms!=null?cf.bathrooms+" ba":null].filter(Boolean).join(" · ")}</span>);
+  if(cf.squareFootage!=null) chips.push(<span className="chip amber" key="sf">{fmtNum(cf.squareFootage)} sqft</span>);
+  if(cf.lastSalePrice!=null) chips.push(<span className="chip" key="pr">${fmtNum(cf.lastSalePrice)}</span>);
+  if(cf.yearBuilt!=null) chips.push(<span className="chip" key="yr">Built {cf.yearBuilt}</span>);
+
+  const remSub = !rems.length ? "None scheduled"
+    : overdue ? overdue + " overdue"
+    : dueSoon ? dueSoon + " due soon"
+    : rems.length + " scheduled";
+
+  return (
+    <div>
+      <div className="hub-name">{home.name}</div>
+      <div className="hub-sub">{[home.address, home.type].filter(Boolean).join(" · ") || "No address yet"}</div>
+
+      <WeatherStrip home={home} />
+
+      {chips.length>0 && <div className="facts">{chips}</div>}
+
+      <div className="hub-cards">
+        <HubCard icon={ICONS.doc}  title="Documents" onClick={()=>onGoto("docs")}
+          sub={docs.length ? docs.length + (docs.length===1?" file":" files") : "None yet"} />
+        <HubCard icon={ICONS.log}  title="Log" onClick={()=>onGoto("log")}
+          sub={events.length ? events.length + (events.length===1?" entry":" entries") + (spend>0 ? " · $"+fmtNum(spend):"") : "Nothing logged"} />
+        <HubCard icon={ICONS.bell} title="Reminders" onClick={()=>onGoto("remind")} sub={remSub} />
+      </div>
+
+      <button className="btn btn-ghost btn-block" style={{marginTop:16}} onClick={onEdit}>
+        <Icon d={ICONS.edit} size={16}/> Edit home details
+      </button>
+    </div>
+  );
+}
+
+/* ============================================================
    APP SHELL
    ============================================================ */
-const TABS = [
-  { key:"homes", label:"Homes", icon:ICONS.home },
-  { key:"log",   label:"Log",   icon:ICONS.log },
-  { key:"docs",  label:"Docs",  icon:ICONS.doc },
-  { key:"remind",label:"Reminders", icon:ICONS.bell },
+// Section tabs shown INSIDE a home. The houses list is the level above these.
+const HOME_TABS = [
+  { key:"overview", label:"Home",      icon:ICONS.home },
+  { key:"docs",     label:"Docs",      icon:ICONS.doc  },
+  { key:"log",      label:"Log",       icon:ICONS.log  },
+  { key:"remind",   label:"Reminders", icon:ICONS.bell },
 ];
 
 function App(){
   const store = useStore();
-  const [tab, setTab] = useState("homes");
+  const [view, setView] = useState("houses");   // "houses" (top level) | "home" (inside one)
+  const [tab, setTab] = useState("overview");    // section within a home
   const [sheet, setSheet] = useState(null);   // null | {home}
   const [eventSheet, setEventSheet] = useState(null);   // null | {event}
   const [remSheet, setRemSheet] = useState(null);       // null | {reminder, preset}
@@ -2016,6 +2211,13 @@ function App(){
     };
   }, [checkUpdate]);
 
+  // ---- navigation between the houses list and inside a house ----
+  const enterHome = (h) => {
+    if(store.cfg.activeHomeId !== h.id) store.saveCfg({ ...store.cfg, activeHomeId: h.id });
+    setTab("overview"); setView("home");
+  };
+  const backToHouses = () => setView("houses");
+
   // ---- home CRUD handlers ----
   const saveHome = (rec) => {
     const homes = store.data.homes || [];
@@ -2025,12 +2227,14 @@ function App(){
     if(!store.cfg.activeHomeId || !exists) store.saveCfg({ ...store.cfg, activeHomeId: rec.id });
     setSheet(null);
     showToast(exists ? "Home updated" : "Home added");
+    if(!exists){ setTab("overview"); setView("home"); }   // a new home opens straight into its hub
   };
   const deleteHome = (id) => {
     const next = (store.data.homes||[]).filter(h => h.id !== id);
     store.saveCollection("homes", next);
     if(store.cfg.activeHomeId === id) store.saveCfg({ ...store.cfg, activeHomeId: next[0] ? next[0].id : null });
     setSheet(null);
+    setView("houses");                                    // deleting the current home returns to the list
     showToast("Home deleted");
   };
 
@@ -2265,7 +2469,9 @@ function App(){
     return <AuthScreen />;
   }
 
-  const activeHome = (store.data.homes||[]).find(h => h.id === store.cfg.activeHomeId) || (store.data.homes||[])[0] || null;
+  const homes = store.data.homes || [];
+  const activeHome = homes.find(h => h.id === store.cfg.activeHomeId) || null;
+  const inHome = view === "home" && !!activeHome;   // guard: never "inside" a home that's gone
 
   return (
     <div className="app">
@@ -2282,13 +2488,28 @@ function App(){
 
       <div className="topbar">
         <div className="topbar-row">
-          <div>
-            <div className="eyebrow">{inSettings ? "Settings" : (activeHome ? activeHome.name : "HomeCaptain")}</div>
-            <h1 className="title">{inSettings ? "Settings" : TABS.find(t=>t.key===tab).label}</h1>
-          </div>
-          <button className="icon-btn" onClick={()=>setInSettings(s=>!s)} aria-label="Settings">
-            <Icon d={inSettings ? ICONS.back : ICONS.gear} size={21}/>
-          </button>
+          {inSettings ? (
+            <>
+              <div><div className="eyebrow">HomeCaptain</div><h1 className="title">Settings</h1></div>
+              <button className="icon-btn" onClick={()=>setInSettings(false)} aria-label="Back"><Icon d={ICONS.back} size={21}/></button>
+            </>
+          ) : inHome ? (
+            <>
+              <div style={{display:"flex", alignItems:"center", gap:8, minWidth:0}}>
+                <button className="backbtn" onClick={backToHouses} aria-label="All homes"><Icon d={ICONS.back} size={19}/></button>
+                <div style={{minWidth:0}}>
+                  <div className="eyebrow">{HOME_TABS.find(t=>t.key===tab).label}</div>
+                  <h1 className="title" style={{whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{activeHome.name}</h1>
+                </div>
+              </div>
+              <button className="icon-btn" onClick={()=>setInSettings(true)} aria-label="Settings"><Icon d={ICONS.gear} size={21}/></button>
+            </>
+          ) : (
+            <>
+              <div><div className="eyebrow">HomeCaptain</div><h1 className="title">Your homes</h1></div>
+              <button className="icon-btn" onClick={()=>setInSettings(true)} aria-label="Settings"><Icon d={ICONS.gear} size={21}/></button>
+            </>
+          )}
         </div>
         <div className={"sync "+store.sync}>
           <span className="dot"></span>
@@ -2302,30 +2523,26 @@ function App(){
       <div className="screen">
         {inSettings
           ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={update.state} />
-          : <>
-              {tab==="homes" && <HomesScreen store={store} onAdd={()=>setSheet({home:null})} onEdit={(h)=>setSheet({home:h})} />}
-              {tab==="log" && (activeHome
-                ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})} />
-                : <ComingSoon glyph="HC" title="Add a home first" blurb="The log is organized by property. Add a home to start." />)}
-              {tab==="docs" && (activeHome
-                ? <DocsScreen store={store} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} />
-                : <ComingSoon glyph="HC" title="Add a home first" blurb="Documents are organized by property. Add a home to start." />)}
-              {tab==="remind" && (activeHome
-                ? <RemindersScreen store={store} home={activeHome}
-                    onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
-                    onEdit={(r)=>setRemSheet({reminder:r, preset:null})}
-                    onComplete={completeReminder} />
-                : <ComingSoon glyph="HC" title="Add a home first" blurb="Reminders are organized by property. Add a home to start." />)}
-            </>}
+          : inHome
+            ? (
+                tab==="overview" ? <HomeOverview store={store} home={activeHome} onEdit={()=>setSheet({home:activeHome})} onGoto={setTab} />
+              : tab==="docs"     ? <DocsScreen store={store} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} />
+              : tab==="log"      ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})} />
+              :                    <RemindersScreen store={store} home={activeHome}
+                                     onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
+                                     onEdit={(r)=>setRemSheet({reminder:r, preset:null})}
+                                     onComplete={completeReminder} />
+              )
+            : <HomesScreen store={store} onAdd={()=>setSheet({home:null})} onEnter={enterHome} />}
       </div>
 
-      {!inSettings && tab==="homes" &&
+      {!inSettings && !inHome &&
         <button className="fab" onClick={()=>setSheet({home:null})} aria-label="Add home"><Icon d={ICONS.plus} size={26}/></button>}
-      {!inSettings && tab==="log" && activeHome &&
+      {!inSettings && inHome && tab==="log" &&
         <button className="fab" onClick={()=>setEventSheet({event:null})} aria-label="Log an entry"><Icon d={ICONS.plus} size={26}/></button>}
-      {!inSettings && tab==="remind" && activeHome && (store.data.reminders||[]).some(r=>r.home_id===activeHome.id) &&
+      {!inSettings && inHome && tab==="remind" && (store.data.reminders||[]).some(r=>r.home_id===activeHome.id) &&
         <button className="fab" onClick={()=>setRemSheet({reminder:null, preset:null})} aria-label="Add reminder"><Icon d={ICONS.plus} size={26}/></button>}
-      {!inSettings && tab==="docs" && activeHome && (store.data.documents||[]).some(d=>d.home_id===activeHome.id) &&
+      {!inSettings && inHome && tab==="docs" && (store.data.documents||[]).some(d=>d.home_id===activeHome.id) &&
         <button className="fab" onClick={openImport} aria-label="Add documents"><Icon d={ICONS.plus} size={26}/></button>}
 
       {/* Two inputs on purpose. iOS only shows the Photo Library / Take Photo /
@@ -2348,9 +2565,9 @@ function App(){
           onLink={(url,name)=>importLink(url, name, importHomeId || activeHome.id)}
           onClose={()=>setImportOpen(false)} />}
 
-      {!inSettings &&
+      {!inSettings && inHome &&
         <nav className="nav">
-          {TABS.map(t => (
+          {HOME_TABS.map(t => (
             <button key={t.key} className={"nav-btn "+(tab===t.key?"on":"")} onClick={()=>setTab(t.key)}>
               <Icon d={t.icon} size={22}/>
               {t.label}
