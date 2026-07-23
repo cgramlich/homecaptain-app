@@ -294,9 +294,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.9.7";
+const APP_VERSION = "0.9.8";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-23.9";
+const BUILD = "2026-07-23.10";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -698,17 +698,22 @@ function docCatClass(cat){ const f = DOC_CATEGORIES.find(x=>x.k===cat); return f
 const CATEGORY_REMAP = { "Disclosures":"Purchase & Closing", "Taxes & Financial":"Mortgage & Taxes" };
 function migrateDocCat(cat){ return CATEGORY_REMAP[cat] || cat || "Other"; }
 
-// Guess a category from the filename. Order matters (first match wins): the
-// purchase paperwork - including disclosures - all lands in Purchase & Closing;
-// permits/remodels beat generic repair words; taxes/mortgage after those.
-// Roughly right with zero AI cost; the user re-tags any miss in one tap.
+// Guess a category from the filename. Order matters (first match wins). The
+// specific domains that share generic words with purchase paperwork are checked
+// FIRST: HOA before Purchase (a "Bylaws Amendment" is HOA, not the "amendment"
+// in a purchase). Purchase keywords were narrowed so they stop over-catching:
+// "septic" removed (a septic INSPECTION/MAINTENANCE contract is Maintenance; the
+// purchase disclosure is still caught by "information about"), bare "contract"
+// -> specific purchase contracts (so a "maintenance contract" isn't grabbed),
+// "financ" -> "financing" (so company "Financials" don't match). Users re-tag a
+// miss in one tap, or use Re-sort.
 const DOC_RULES = [
-  [/closing|amendment|addendum|financ|contract|earnest|option fee|one.?to.?four|purchase agreement|settlement|\bdeed\b|promissory|escrow instruction|disclos|septic|lead.?based|brokerage|non.?realty|mud notice|information about/i, "Purchase & Closing"],
+  [/\bhoa\b|homeowners? assoc|owners? association|property owners|\bpoa\b|\bassociation\b|cc&r|\bccr\b|covenant|bylaw/i, "HOA"],
   [/survey|title|t.?47|plat|legal descr|parcel|easement/i, "Title & Survey"],
-  [/\bhoa\b|homeowners? assoc|\bassociation\b|cc&r|\bccr\b|covenant|bylaw/i, "HOA"],
+  [/closing|amendment|addendum|financing|earnest|option fee|one.?to.?four|purchase agreement|purchase contract|residential contract|sales contract|settlement|\bdeed\b|promissory|escrow instruction|disclos|lead.?based|brokerage|non.?realty|mud notice|information about/i, "Purchase & Closing"],
   [/insur|\bpolicy\b|flood cert|home.?warranty|\bclaim/i, "Insurance"],
   [/permit|remodel|renovat|\baddition\b|contractor|estimate|\bbid\b|blueprint|improvement/i, "Improvements & Permits"],
-  [/repair|service|inspection|\bhvac\b|plumb|\broof|pest|maintenance|furnace|water heater|tune.?up|gutter|landscap|\blawn\b/i, "Maintenance & Repairs"],
+  [/repair|service|inspection|\bhvac\b|plumb|\broof|pest|maintenance|furnace|water heater|tune.?up|gutter|landscap|\blawn\b|septic|aerobic|\bossf\b|\bpump/i, "Maintenance & Repairs"],
   [/mortgage|loan statement|escrow|1098|property tax|\btax\b|amortiz|payoff|refinance|deed of trust|appraisal/i, "Mortgage & Taxes"],
   [/warrant|manual|owner.?s guide|spec sheet/i, "Warranties & Manuals"],
 ];
@@ -1984,7 +1989,7 @@ function DocRow({ d, onEdit, onOpen }){
   );
 }
 
-function DocsScreen({ store, home, onAdd, onEdit, onOpen }){
+function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort }){
   const all = (store.data.documents||[]).filter(d => d.home_id === home.id);
 
   if(!all.length){
@@ -2014,8 +2019,11 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen }){
 
   return (
     <div>
-      <div className="log-summary">
-        {all.length} {all.length===1?"document":"documents"}{total>0 ? " · " + humanSize(total) : ""}
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+        <div className="log-summary">
+          {all.length} {all.length===1?"document":"documents"}{total>0 ? " · " + humanSize(total) : ""}
+        </div>
+        <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onResort}>Re-sort by name</button>
       </div>
       {groups.map(g => {
         const open = !collapsed[g[0]];
@@ -2544,6 +2552,23 @@ function App(){
     showToast("Document deleted");
   };
   const openDoc = (d) => { openStoredFile(d.path, showToast); };
+  // Re-run the filename classifier over this home's documents and re-file them.
+  // Fixes an older auto-sort in bulk without re-importing; overwrites categories,
+  // so confirm first (it also replaces any manual re-tags).
+  const resortDocs = (home) => {
+    const docs = store.data.documents || [];
+    if(!confirm("Re-sort every document for this home by its filename? This replaces the current categories.")) return;
+    let changed = 0;
+    const next = docs.map(d => {
+      if(d.home_id !== home.id) return d;
+      const base = (d.sourceName ? d.sourceName.split("/").pop() : d.name) || d.name || "";
+      const cat = classifyDoc(base);
+      if(cat !== d.category){ changed++; return { ...d, category: cat, updatedAt: nowISO() }; }
+      return d;
+    });
+    if(changed){ store.saveCollection("documents", next); showToast("Re-sorted " + changed + " document" + (changed===1?"":"s")); }
+    else showToast("Everything was already sorted");
+  };
   // Read a document with AI, then cache the result on the doc so re-opening it
   // shows the same facts without paying to re-read. Returns the result to the sheet.
   const extractDoc = async (d) => {
@@ -2669,7 +2694,7 @@ function App(){
           : inHome
             ? (
                 tab==="overview" ? <HomeOverview store={store} home={activeHome} onEdit={()=>setSheet({home:activeHome})} onGoto={setTab} />
-              : tab==="docs"     ? <DocsScreen store={store} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} />
+              : tab==="docs"     ? <DocsScreen store={store} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} onResort={()=>resortDocs(activeHome)} />
               : tab==="log"      ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})} />
               :                    <RemindersScreen store={store} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
