@@ -17,9 +17,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"
+        integrity="sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8"
+        crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"
+        integrity="sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh"
+        crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"
+        integrity="sha384-1qlE7MZPM2pHD/pBZCU/yB8UCP52RYL8bge/qNdfNBCWToySp8/M+JL2waXU4hjJ"
+        crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 /* ============================================================
@@ -119,6 +125,13 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .input,.textarea,.select{width:100%;background:var(--bg-3);border:1px solid var(--line-2);border-radius:var(--radius-sm);
   padding:12px 13px;color:var(--ink);outline:none;transition:.18s;font-size:16px;}
 .input:focus,.textarea:focus,.select:focus{border-color:var(--amber-line);background:var(--bg-4);}
+/* password field with the reveal eyeball (PORTABLE-IMPROVEMENTS 2026-07-10) */
+.pw-wrap{position:relative;}
+.pw-wrap .input{padding-right:46px;}
+.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;
+  display:flex;align-items:center;justify-content:center;border-radius:50%;color:var(--ink-3);}
+.pw-eye:active{color:var(--ink);}
+.pw-eye svg{width:19px;height:19px;stroke-width:1.9;}
 .textarea{resize:vertical;min-height:84px;line-height:1.5;}
 .title-field{margin-bottom:18px;}
 .title-field .label{color:var(--amber);}
@@ -256,9 +269,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.7.4";
+const APP_VERSION = "0.7.5";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-20.7";
+const BUILD = "2026-07-22.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -852,7 +865,29 @@ const ICONS = {
   file:    ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z","M14 2v6h6"],
   external:["M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6","M15 3h6v6","M10 14L21 3"],
   upload:  ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M17 8l-5-5-5 5","M12 3v12"],
+  eye:     ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
+  eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
 };
+
+/* ============================================================
+   PASSWORD INPUT with reveal eyeball - the shared-shell STANDARD
+   (PORTABLE-IMPROVEMENTS 2026-07-10). Used on EVERY password field.
+   ============================================================ */
+function PwInput({ value, onChange, placeholder, autoComplete, onEnter }){
+  const [show, setShow] = useState(false);
+  return (
+    <div className="pw-wrap">
+      <input className="input" type={show ? "text" : "password"} value={value}
+        autoCapitalize="off" autoComplete={autoComplete||"current-password"}
+        onChange={e=>onChange(e.target.value)} placeholder={placeholder||""}
+        onKeyDown={e=>{ if(e.key==="Enter" && onEnter) onEnter(); }} />
+      <button type="button" className="pw-eye" onClick={()=>setShow(s=>!s)}
+        aria-label={show ? "Hide password" : "Show password"}>
+        <Icon d={show ? ICONS.eyeOff : ICONS.eye} size={19}/>
+      </button>
+    </div>
+  );
+}
 
 /* ============================================================
    AUTH SCREEN
@@ -909,8 +944,8 @@ function AuthScreen(){
       </div>
       <div className="field">
         <label className="label">Password</label>
-        <input className="input" type="password" autoComplete={mode==="up"?"new-password":"current-password"}
-          value={pw} onChange={e=>setPw(e.target.value)} placeholder="********" />
+        <PwInput value={pw} onChange={setPw} placeholder="********"
+          autoComplete={mode==="up"?"new-password":"current-password"} onEnter={submit} />
       </div>
       <button className="btn btn-primary btn-block" disabled={busy || !configured} onClick={submit}>
         {busy ? <span className="spin"></span> : (mode==="up" ? "Create account" : "Sign in")}

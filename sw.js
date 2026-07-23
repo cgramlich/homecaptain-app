@@ -26,7 +26,7 @@
    - everything else (photo signed URLs, other API, writes) -> default network
 */
 
-const VERSION      = "0.7.4";                 // keep in lockstep with APP_VERSION
+const VERSION      = "0.7.5";                 // keep in lockstep with APP_VERSION
 const SHELL_CACHE  = "hc-shell-" + VERSION;
 const ASSET_CACHE  = "hc-assets-" + VERSION;
 const DATA_CACHE   = "hc-data-v1";            // user collections; UN-versioned so it
@@ -36,10 +36,23 @@ const DATA_CACHE   = "hc-data-v1";            // user collections; UN-versioned 
 const SHELL_URL    = new URL("./", self.location).pathname;
 
 // Primed on install so even the very first offline open works.
+// The cdnjs entries carry SRI (integrity) + CORS mode, mirroring the <script>
+// tags in index.html, so a tampered CDN response can never enter the cache
+// (PORTABLE-IMPROVEMENTS 2026-07-22). Hashes are per-file-version - recompute
+// on any lib upgrade. supabase-js is a floating @2 tag so it cannot carry SRI.
 const CRITICAL_ASSETS = [
-  "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js",
+  new Request("https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js", {
+    integrity: "sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8",
+    mode: "cors",
+  }),
+  new Request("https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js", {
+    integrity: "sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh",
+    mode: "cors",
+  }),
+  new Request("https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js", {
+    integrity: "sha384-1qlE7MZPM2pHD/pBZCU/yB8UCP52RYL8bge/qNdfNBCWToySp8/M+JL2waXU4hjJ",
+    mode: "cors",
+  }),
   "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
   new URL("./manifest.json", self.location).href,
   new URL("./icon-192.png", self.location).href,
