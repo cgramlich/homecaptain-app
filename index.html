@@ -269,7 +269,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.7.5";
+const APP_VERSION = "0.8.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 const BUILD = "2026-07-22.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
@@ -431,6 +431,24 @@ async function importFromUrl(path, url){
     throw new Error(detail || ("Import failed ("+r.status+")"));
   }
   return await r.json();   // { path, size, content_type }
+}
+// Read a stored document with AI and get back { documentType, summary, fields }.
+// The file stays server-side; only the extracted facts return.
+async function extractDocument(path){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/documents/extract", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ path })
+  });
+  if(!r.ok){
+    let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
+    if(r.status===402 || r.status===429) throw new Error(detail || "AI is at its limit for now. Try again later.");
+    if(r.status===503) throw new Error(detail || "AI is temporarily unavailable.");
+    throw new Error(detail || ("Couldn't read that document ("+r.status+")."));
+  }
+  return await r.json();
 }
 async function deleteFile(path){
   const token = await authToken();
@@ -678,6 +696,37 @@ function humanSize(b){
 }
 const DOC_MAX_BYTES = 20 * 1024 * 1024;   // 20 MB/file cap; keeps JSON POST bodies sane
 function isPdfName(n){ return /\.pdf$/i.test(String(n||"")); }
+// Human labels + formatting for facts the AI pulls out of a document. Order is
+// the display order; anything not listed here is ignored by the review UI.
+const EXTRACT_FIELDS = [
+  ["purchasePrice",   "Purchase price",  "money"],
+  ["closingDate",     "Closing date",    "date"],
+  ["loanAmount",      "Loan amount",     "money"],
+  ["loanType",        "Loan type",       "text"],
+  ["lender",          "Lender",          "text"],
+  ["interestRate",    "Interest rate",   "pct"],
+  ["monthlyPayment",  "Monthly payment", "money"],
+  ["squareFootage",   "Square footage",  "num"],
+  ["lotSizeSqft",     "Lot size (sq ft)","num"],
+  ["lotSizeAcres",    "Lot size (acres)","acres"],
+  ["yearBuilt",       "Year built",      "year"],
+  ["bedrooms",        "Bedrooms",        "num"],
+  ["bathrooms",       "Bathrooms",       "num"],
+  ["parcelNumber",    "Parcel / APN",    "text"],
+  ["legalDescription","Legal description","text"],
+  ["propertyAddress", "Address on file", "text"],
+];
+function fmtExtract(kind, v){
+  if(v==null || v==="") return "";
+  if(kind==="money"){ const n=Number(v); return isNaN(n) ? String(v) : "$"+n.toLocaleString(); }
+  if(kind==="pct"){ return String(v)+"%"; }
+  if(kind==="date"){ return fmtDate(v); }
+  if(kind==="year"){ return String(v); }
+  if(kind==="num"){ const n=Number(v); return isNaN(n) ? String(v) : n.toLocaleString(); }
+  if(kind==="acres"){ return String(v)+" ac"; }
+  return String(v);
+}
+
 // The Files picker allows any type, so label honestly rather than assuming
 // "anything that isn't a PDF must be an image".
 function fileKind(path, mime){
@@ -1695,16 +1744,42 @@ function ImportSheet({ homes, homeId, onHome, showDropbox, onFiles, onPhotos, on
   );
 }
 
-function DocSheet({ doc, onSave, onDelete, onClose, onOpen }){
+function DocSheet({ doc, homeName, onSave, onDelete, onClose, onOpen, onExtract, onApply }){
   const [name, setName] = useState(doc ? (doc.name||"") : "");
   const [category, setCategory] = useState(doc ? (doc.category||"Other") : "Other");
   const [note, setNote] = useState(doc ? (doc.note||"") : "");
+  const [extract, setExtract] = useState(doc && doc.extracted ? doc.extracted : null);
+  const [reading, setReading] = useState(false);
+  const [exErr, setExErr] = useState("");
+  const [applied, setApplied] = useState(false);
   if(!doc) return null;
 
   const save = () => {
     if(!name.trim()) return;
     onSave({ ...doc, name: name.trim(), category, note: note.trim(), updatedAt: nowISO() });
   };
+
+  const runExtract = async () => {
+    setReading(true); setExErr(""); setApplied(false);
+    try {
+      const res = await onExtract(doc);        // { documentType, summary, fields }
+      setExtract(res);
+      if(!res || !res.fields || !Object.keys(res.fields).length)
+        setExErr("No property facts found in this document.");
+    } catch(e){ setExErr(e.message || "Couldn't read that document."); }
+    finally { setReading(false); }
+  };
+
+  const foundRows = extract && extract.fields
+    ? EXTRACT_FIELDS.filter(([k]) => extract.fields[k] != null && extract.fields[k] !== "")
+    : [];
+
+  const apply = () => {
+    onApply(doc, extract.fields);
+    setApplied(true);
+  };
+
+  const canRead = fileKind(doc.path, doc.mime) !== "File";   // PDF or image only
 
   return (
     <>
@@ -1738,6 +1813,43 @@ function DocSheet({ doc, onSave, onDelete, onClose, onOpen }){
           <textarea className="textarea" value={note} onChange={e=>setNote(e.target.value)}
             placeholder="Anything worth remembering about this document..." />
         </div>
+
+        {canRead &&
+          <div className="field">
+            <label className="label">Read with AI</label>
+            {!extract &&
+              <>
+                <button className="btn btn-ghost btn-block" onClick={runExtract} disabled={reading}>
+                  {reading ? <span className="spin"></span> : <><Icon d={ICONS.doc} size={16}/> Pull details into {homeName || "this home"}</>}
+                </button>
+                <div className="hint" style={{marginTop:8}}>
+                  Reads a closing disclosure, survey, or title commitment and pulls out the purchase price, loan, closing date, and lot details.
+                </div>
+              </>}
+            {extract &&
+              <div className="assist-msg" style={{marginTop:0}}>
+                {extract.documentType && <div style={{fontWeight:600, marginBottom:4}}>{extract.documentType}</div>}
+                {extract.summary && <div style={{marginBottom:foundRows.length?10:0}}>{extract.summary}</div>}
+                {foundRows.length>0 &&
+                  <div style={{display:"flex", flexDirection:"column", gap:5}}>
+                    {foundRows.map(([k,label,kind]) =>
+                      <div key={k} style={{display:"flex", justifyContent:"space-between", gap:10, fontSize:"13px"}}>
+                        <span style={{color:"var(--ink-3)"}}>{label}</span>
+                        <span style={{fontWeight:600, textAlign:"right"}}>{fmtExtract(kind, extract.fields[k])}</span>
+                      </div>)}
+                  </div>}
+                <div style={{display:"flex", gap:8, marginTop:12}}>
+                  {foundRows.length>0 &&
+                    <button className="btn btn-primary btn-sm" style={{flex:1}} onClick={apply} disabled={applied}>
+                      {applied ? "Applied ✓" : "Apply to "+(homeName||"home")}
+                    </button>}
+                  <button className="btn btn-ghost btn-sm" onClick={runExtract} disabled={reading}>
+                    {reading ? <span className="spin"></span> : "Re-read"}
+                  </button>
+                </div>
+              </div>}
+            {exErr && <div className="assist-msg" style={{marginTop:8}}>{exErr}</div>}
+          </div>}
 
         <div className="facts">
           {doc.size ? <span className="chip">{humanSize(doc.size)}</span> : null}
@@ -2043,6 +2155,47 @@ function App(){
     showToast("Document deleted");
   };
   const openDoc = (d) => { openStoredFile(d.path, showToast); };
+  // Read a document with AI, then cache the result on the doc so re-opening it
+  // shows the same facts without paying to re-read. Returns the result to the sheet.
+  const extractDoc = async (d) => {
+    const res = await extractDocument(d.path);
+    const stamped = { ...res, at: nowISO() };
+    const list = store.data.documents || [];
+    store.saveCollection("documents", list.map(x => x.id===d.id ? {...x, extracted: stamped} : x));
+    return stamped;
+  };
+  // Merge extracted facts onto the document's home. Stores every field under its
+  // own key, and fills the profile slots the UI already shows only when empty,
+  // so applying twice or over existing data never clobbers what you typed.
+  const applyDocFacts = (d, fields) => {
+    const homes = store.data.homes || [];
+    const home = homes.find(h => h.id === d.home_id);
+    if(!home){ showToast("Home not found"); return; }
+    const facts = { ...(home.facts||{}) };
+    // Profile fields the app shows and the user may have typed: FILL only when
+    // empty, never overwrite. (A blanket {...fields} spread was clobbering a
+    // typed yearBuilt/sqft/beds/baths, so those are handled one at a time.)
+    const fillIfEmpty = (key, val) => {
+      if(val!=null && val!=="" && (facts[key]==null || facts[key]==="")) facts[key]=val;
+    };
+    fillIfEmpty("lastSalePrice", fields.purchasePrice);
+    fillIfEmpty("lastSaleDate",  fields.closingDate);
+    fillIfEmpty("lotSize",       fields.lotSizeSqft);
+    fillIfEmpty("squareFootage", fields.squareFootage);
+    fillIfEmpty("yearBuilt",     fields.yearBuilt);
+    fillIfEmpty("bedrooms",      fields.bedrooms);
+    fillIfEmpty("bathrooms",     fields.bathrooms);
+    // Document-only facts (never shown as profile chips) stored under their own
+    // keys; these come straight from the closing paperwork, so taking the
+    // document value is correct.
+    ["purchasePrice","loanAmount","loanType","lender","interestRate","monthlyPayment",
+     "closingDate","lotSizeAcres","parcelNumber","legalDescription","propertyAddress"]
+      .forEach(k => { if(fields[k]!=null && fields[k]!=="") facts[k]=fields[k]; });
+    const patch = { ...home, facts, updatedAt: nowISO() };
+    if(fields.closingDate && !home.purchaseDate) patch.purchaseDate = fields.closingDate;
+    store.saveCollection("homes", homes.map(h => h.id===home.id ? patch : h));
+    showToast("Added to " + home.name);
+  };
 
   // Repeating: roll the due date forward from today. One-time: toggle done/reopen.
   const completeReminder = (r) => {
@@ -2174,7 +2327,10 @@ function App(){
           onSave={saveReminder} onDelete={deleteReminder} onClose={()=>setRemSheet(null)} />}
 
       {docSheet &&
-        <DocSheet doc={docSheet.doc} onSave={saveDoc} onDelete={deleteDoc} onOpen={openDoc} onClose={()=>setDocSheet(null)} />}
+        <DocSheet doc={docSheet.doc}
+          homeName={((store.data.homes||[]).find(h=>h.id===docSheet.doc.home_id)||{}).name || ""}
+          onSave={saveDoc} onDelete={deleteDoc} onOpen={openDoc}
+          onExtract={extractDoc} onApply={applyDocFacts} onClose={()=>setDocSheet(null)} />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>
