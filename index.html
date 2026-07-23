@@ -179,6 +179,12 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .hub-card-chev{color:var(--ink-3);flex:none;}
 .backbtn{flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:var(--bg-3);border:1px solid var(--line-2);display:inline-flex;align-items:center;justify-content:center;color:var(--ink);}
 .home-card-chev{color:var(--ink-3);flex:none;align-self:center;}
+/* collapsible document sections */
+.doc-group{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;padding:18px 2px 8px;text-align:left;color:var(--ink-3);}
+.doc-group-title{font-family:'Outfit';font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:var(--ink-3);}
+.doc-group-count{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--bg-4);border-radius:999px;padding:1px 8px;}
+.doc-group-chev{margin-left:auto;color:var(--ink-3);transition:transform .18s var(--ease);}
+.doc-group-chev.open{transform:rotate(90deg);}
 .photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin:2px 0 16px;}
 .thumb{position:relative;aspect-ratio:1;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--line-2);background:var(--bg-3);}
 .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -288,9 +294,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.9.4";
+const APP_VERSION = "0.9.5";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-23.6";
+const BUILD = "2026-07-23.7";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -675,29 +681,36 @@ const REMINDER_PRESETS = [
    Categories span the whole life of a home, not just the purchase. Order is the
    display order; the color reuses the existing chip classes. */
 const DOC_CATEGORIES = [
-  { k:"Purchase & Closing",    c:"amber"  },
-  { k:"Title & Survey",        c:"blue"   },
-  { k:"Disclosures",           c:"violet" },
-  { k:"HOA",                   c:"green"  },
-  { k:"Insurance",             c:"blue"   },
-  { k:"Warranties & Manuals",  c:"green"  },
-  { k:"Taxes & Financial",     c:"amber"  },
-  { k:"Other",                 c:""       },
+  { k:"Purchase & Closing",     c:"amber"  },   // incl. disclosures (all part of buying)
+  { k:"Title & Survey",         c:"blue"   },
+  { k:"Mortgage & Taxes",       c:"green"  },
+  { k:"Insurance",              c:"blue"   },
+  { k:"Maintenance & Repairs",  c:"red"    },
+  { k:"Improvements & Permits", c:"violet" },
+  { k:"Warranties & Manuals",   c:"green"  },
+  { k:"HOA",                    c:"amber"  },
+  { k:"Other",                  c:""       },
 ];
 function docCatClass(cat){ const f = DOC_CATEGORIES.find(x=>x.k===cat); return f && f.c ? f.c : ""; }
 
-// Guess a category from the filename. Order matters: "Closing Disclosure" must
-// hit Purchase & Closing (via "closing") before Disclosures. Rules cover the
-// standard US real estate packet plus later home-ownership documents. Roughly
-// 90% right with zero AI cost; the user can re-tag any miss in one tap.
+// Old category names -> current ones, so documents filed before the taxonomy
+// change keep a valid home instead of vanishing from the grouped view.
+const CATEGORY_REMAP = { "Disclosures":"Purchase & Closing", "Taxes & Financial":"Mortgage & Taxes" };
+function migrateDocCat(cat){ return CATEGORY_REMAP[cat] || cat || "Other"; }
+
+// Guess a category from the filename. Order matters (first match wins): the
+// purchase paperwork - including disclosures - all lands in Purchase & Closing;
+// permits/remodels beat generic repair words; taxes/mortgage after those.
+// Roughly right with zero AI cost; the user re-tags any miss in one tap.
 const DOC_RULES = [
-  [/closing|amendment|addendum|financ|contract|earnest|option fee|one.?to.?four|purchase agreement|settlement|deed|promissory|escrow instruction/i, "Purchase & Closing"],
+  [/closing|amendment|addendum|financ|contract|earnest|option fee|one.?to.?four|purchase agreement|settlement|\bdeed\b|promissory|escrow instruction|disclos|septic|lead.?based|brokerage|non.?realty|mud notice|information about/i, "Purchase & Closing"],
   [/survey|title|t.?47|plat|legal descr|parcel|easement/i, "Title & Survey"],
-  [/disclos|septic|lead.?based|brokerage|non.?realty|mud notice|information about/i, "Disclosures"],
-  [/\bhoa\b|homeowners? assoc|\bassociation\b|cc&r|\bccr\b|covenant|bylaw|community/i, "HOA"],
-  [/insur|policy|flood cert|home.?warranty|claim/i, "Insurance"],
+  [/\bhoa\b|homeowners? assoc|\bassociation\b|cc&r|\bccr\b|covenant|bylaw/i, "HOA"],
+  [/insur|\bpolicy\b|flood cert|home.?warranty|\bclaim/i, "Insurance"],
+  [/permit|remodel|renovat|\baddition\b|contractor|estimate|\bbid\b|blueprint|improvement/i, "Improvements & Permits"],
+  [/repair|service|inspection|\bhvac\b|plumb|\broof|pest|maintenance|furnace|water heater|tune.?up|gutter|landscap|\blawn\b/i, "Maintenance & Repairs"],
+  [/mortgage|loan statement|escrow|1098|property tax|\btax\b|amortiz|payoff|refinance|deed of trust|appraisal/i, "Mortgage & Taxes"],
   [/warrant|manual|owner.?s guide|spec sheet/i, "Warranties & Manuals"],
-  [/tax|mortgage statement|1098|appraisal|amortiz|payoff/i, "Taxes & Financial"],
 ];
 function classifyDoc(filename){
   const n = String(filename||"");
@@ -1815,7 +1828,7 @@ function ImportSheet({ homes, homeId, onHome, showDropbox, onFiles, onFolder, on
 
 function DocSheet({ doc, homeName, onSave, onDelete, onClose, onOpen, onExtract, onApply }){
   const [name, setName] = useState(doc ? (doc.name||"") : "");
-  const [category, setCategory] = useState(doc ? (doc.category||"Other") : "Other");
+  const [category, setCategory] = useState(doc ? migrateDocCat(doc.category) : "Other");
   const [note, setNote] = useState(doc ? (doc.note||"") : "");
   const [extract, setExtract] = useState(doc && doc.extracted ? doc.extracted : null);
   const [reading, setReading] = useState(false);
@@ -1971,23 +1984,37 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen }){
 
   const byNew = (a,b) => String(b.createdAt||"").localeCompare(String(a.createdAt||""));
   const total = all.reduce((s,d)=> s + (Number(d.size)||0), 0);
+  // Group by the CURRENT category (migrating any old name), so a doc whose
+  // category was renamed still lands in a real section instead of disappearing.
   const groups = DOC_CATEGORIES
-    .map(c => [c.k, all.filter(d => (d.category||"Other") === c.k).sort(byNew)])
+    .map(c => [c.k, all.filter(d => migrateDocCat(d.category) === c.k).sort(byNew)])
     .filter(g => g[1].length);
+
+  // Collapsed sections tracked by name; all expanded by default.
+  const [collapsed, setCollapsed] = useState({});
+  const toggle = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
 
   return (
     <div>
       <div className="log-summary">
         {all.length} {all.length===1?"document":"documents"}{total>0 ? " · " + humanSize(total) : ""}
       </div>
-      {groups.map(g => (
-        <div key={g[0]}>
-          <div className="set-group">{g[0]}</div>
-          <div className="list" style={{marginTop:0}}>
-            {g[1].map(d => <DocRow key={d.id} d={d} onEdit={onEdit} onOpen={onOpen} />)}
+      {groups.map(g => {
+        const open = !collapsed[g[0]];
+        return (
+          <div key={g[0]}>
+            <button className="doc-group" onClick={()=>toggle(g[0])} aria-expanded={open}>
+              <span className="doc-group-title">{g[0]}</span>
+              <span className="doc-group-count">{g[1].length}</span>
+              <span className={"doc-group-chev"+(open?" open":"")}><Icon d={ICONS.chev} size={16}/></span>
+            </button>
+            {open &&
+              <div className="list" style={{marginTop:0}}>
+                {g[1].map(d => <DocRow key={d.id} d={d} onEdit={onEdit} onOpen={onOpen} />)}
+              </div>}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -2251,6 +2278,17 @@ function App(){
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [checkUpdate]);
+
+  // One-time cleanup: rewrite any document still tagged with an old category
+  // name to the current one, so stored data matches the pills. Converges after
+  // one save (the remap check is then false).
+  useEffect(() => {
+    const docs = store.data.documents || [];
+    if(store.authed && docs.some(d => CATEGORY_REMAP[d.category])){
+      store.saveCollection("documents", docs.map(d =>
+        CATEGORY_REMAP[d.category] ? { ...d, category: migrateDocCat(d.category) } : d));
+    }
+  }, [store.data.documents, store.authed]);
 
   // ---- navigation between the houses list and inside a house ----
   const enterHome = (h) => {
