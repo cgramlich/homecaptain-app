@@ -185,6 +185,9 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .doc-group-count{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--bg-4);border-radius:999px;padding:1px 8px;}
 .doc-group-chev{margin-left:auto;color:var(--ink-3);transition:transform .18s var(--ease);}
 .doc-group-chev.open{transform:rotate(90deg);}
+.doc-tools{display:flex;gap:8px;margin:10px 0 2px;}
+.doc-tools .input{flex:1;min-width:0;}
+.doc-tools .select{flex:0 0 116px;}
 .photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin:2px 0 16px;}
 .thumb{position:relative;aspect-ratio:1;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--line-2);background:var(--bg-3);}
 .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -1989,6 +1992,12 @@ function DocRow({ d, onEdit, onOpen }){
 }
 
 function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort }){
+  // Hooks first (before any early return) so the count stays constant.
+  const [collapsed, setCollapsed] = useState({});
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("date-desc");
+  const toggle = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+
   const all = (store.data.documents||[]).filter(d => d.home_id === home.id);
 
   if(!all.length){
@@ -2004,28 +2013,55 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort }){
     );
   }
 
-  const byNew = (a,b) => String(b.createdAt||"").localeCompare(String(a.createdAt||""));
   const total = all.reduce((s,d)=> s + (Number(d.size)||0), 0);
-  // Group by the CURRENT category (migrating any old name), so a doc whose
-  // category was renamed still lands in a real section instead of disappearing.
-  const groups = DOC_CATEGORIES
-    .map(c => [c.k, all.filter(d => migrateDocCat(d.category) === c.k).sort(byNew)])
-    .filter(g => g[1].length);
+  const q = query.trim().toLowerCase();
+  const matched = q ? all.filter(d => (d.name||"").toLowerCase().includes(q)) : all;
 
-  // Collapsed sections tracked by name; all expanded by default.
-  const [collapsed, setCollapsed] = useState({});
-  const toggle = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+  const CMP = {
+    "date-desc": (a,b)=> String(b.createdAt||"").localeCompare(String(a.createdAt||"")),
+    "date-asc":  (a,b)=> String(a.createdAt||"").localeCompare(String(b.createdAt||"")),
+    "name-asc":  (a,b)=> String(a.name||"").localeCompare(String(b.name||""), undefined, {numeric:true}),
+    "name-desc": (a,b)=> String(b.name||"").localeCompare(String(a.name||""), undefined, {numeric:true}),
+    "size-desc": (a,b)=> (Number(b.size)||0)-(Number(a.size)||0),
+    "size-asc":  (a,b)=> (Number(a.size)||0)-(Number(b.size)||0),
+  };
+  const cmp = CMP[sort] || CMP["date-desc"];
+
+  // Group by the CURRENT category (migrating any old name), sorted per the picker.
+  const groups = DOC_CATEGORIES
+    .map(c => [c.k, matched.filter(d => migrateDocCat(d.category) === c.k).sort(cmp)])
+    .filter(g => g[1].length);
+  const shown = matched.length;
 
   return (
     <div>
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
         <div className="log-summary">
-          {all.length} {all.length===1?"document":"documents"}{total>0 ? " · " + humanSize(total) : ""}
+          {q ? shown + " of " + all.length + " match" : all.length + (all.length===1?" document":" documents") + (total>0 ? " · " + humanSize(total) : "")}
         </div>
         <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onResort}>Re-sort by name</button>
       </div>
+
+      <div className="doc-tools">
+        <input className="input" value={query} onChange={e=>setQuery(e.target.value)}
+          placeholder="Search documents" aria-label="Search documents" />
+        <select className="select" value={sort} onChange={e=>setSort(e.target.value)} aria-label="Sort">
+          <option value="date-desc">Newest</option>
+          <option value="date-asc">Oldest</option>
+          <option value="name-asc">Name A-Z</option>
+          <option value="name-desc">Name Z-A</option>
+          <option value="size-desc">Largest</option>
+          <option value="size-asc">Smallest</option>
+        </select>
+      </div>
+
+      {!groups.length &&
+        <div className="empty" style={{padding:"40px 20px"}}>
+          <p>No documents match "{query}".</p>
+        </div>}
+
       {groups.map(g => {
-        const open = !collapsed[g[0]];
+        const open = q ? true : !collapsed[g[0]];   // searching force-expands
         return (
           <div key={g[0]}>
             <button className="doc-group" onClick={()=>toggle(g[0])} aria-expanded={open}>
