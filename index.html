@@ -278,6 +278,7 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .toast{position:fixed;bottom:calc(var(--nav-h) + 24px);left:50%;transform:translateX(-50%);z-index:90;
   background:var(--bg-4);border:1px solid var(--line-2);color:var(--ink);padding:9px 18px;border-radius:999px;font-size:13.5px;font-weight:500;box-shadow:var(--shadow-lg);animation:fade .2s;max-width:90%;}
 .update-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:var(--amber);color:#241a0c;border:none;text-align:left;padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;font-size:13.5px;font-weight:600;}
+.update-bar svg{width:15px;height:15px;vertical-align:-2px;margin-right:3px;stroke:#241a0c;}
 .update-go{flex:0 0 auto;background:#241a0c;color:var(--amber);border-radius:999px;padding:6px 15px;font-weight:800;font-size:12.5px;}
 </style>
 </head>
@@ -294,9 +295,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.9.8";
+const APP_VERSION = "0.9.9";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-23.10";
+const BUILD = "2026-07-23.11";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1011,6 +1012,7 @@ const ICONS = {
   x:       ["M18 6L6 18","M6 6l12 12"],
   back:    ["M19 12H5","M12 19l-7-7 7-7"],
   refresh: ["M23 4v6h-6","M1 20v-6h6","M3.51 9a9 9 0 0 1 14.85-3.36L23 10","M1 14l4.64 4.36A9 9 0 0 0 20.49 15"],
+  sparkle: ["M12 3l1.7 4.8L18.5 9.5l-4.8 1.7L12 16l-1.7-4.8L5.5 9.5l4.8-1.7z","M18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z"],
   camera:  ["M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z","M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"],
   check:   ["M20 6L9 17l-5-5"],
   undo:    ["M3 7v6h6","M3.51 13a9 9 0 1 0 2.13-5.36L3 10"],
@@ -1110,6 +1112,7 @@ function AuthScreen(){
           {mode==="up" ? "Sign in" : "Create one"}
         </button>
       </div>
+      <p className="hint" style={{textAlign:"center",marginTop:16,opacity:.6}}>HomeCaptain v{APP_VERSION}</p>
     </div>
   );
 }
@@ -1391,7 +1394,7 @@ function ComingSoon({ title, blurb, glyph }){
   );
 }
 
-function SettingsScreen({ store, onCheckUpdate, updateState }){
+function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate }){
   const [showLog, setShowLog] = useState(false);
   return (
     <div>
@@ -1402,24 +1405,20 @@ function SettingsScreen({ store, onCheckUpdate, updateState }){
       </div>
 
       <div className="set-group">About</div>
-      <div className="card">
-        <div className="updrow">
-          <span className="subtle">HomeCaptain v{APP_VERSION} (build {BUILD})</span>
-        </div>
-        <div className="updrow" style={{marginTop:8}}>
-          {updateState==="checking"
-            ? <span className="spin"></span>
-            : <button className="btn btn-ghost btn-sm" onClick={onCheckUpdate}><Icon d={ICONS.refresh} size={14}/> Check for updates</button>}
-          {updateState==="current" && <span className="subtle">You are up to date.</span>}
-          {updateState==="error" && <span className="subtle danger-text">Could not check.</span>}
-        </div>
+      <div className="updrow">
+        {update
+          ? <button className="btn btn-primary btn-sm" style={{margin:0}} onClick={()=>onApplyUpdate && onApplyUpdate()}><Icon d={ICONS.sparkle} size={14}/> Update to v{update.ver||update.build}</button>
+          : <button className="btn btn-ghost btn-sm" style={{margin:0}} onClick={()=>onCheckUpdate && onCheckUpdate(true)}>Check for updates</button>}
+        {updMsg && <span className="hint" style={{margin:0}}>{updMsg}</span>}
       </div>
+      <p className="hint" style={{textAlign:"center",marginTop:6}}>HomeCaptain v{APP_VERSION}</p>
 
       <div className="set-group">Diagnostics</div>
       <div className="card">
         <button className="btn btn-ghost btn-block" onClick={()=>setShowLog(s=>!s)}>{showLog ? "Hide" : "Show"} log</button>
         {showLog &&
           <div className="log" style={{marginTop:12}}>
+            <div className="subtle">v{APP_VERSION} (build {BUILD}) - newest at the bottom, {LOG.length} lines</div>
             {LOG.slice(-120).map((l,i)=>(
               <div key={i} className={l.tag==="ERROR"?"err":""}>
                 <span className="t">{l.t} </span><span className="tag">[{l.tag}]</span> {l.msg}
@@ -2263,24 +2262,41 @@ function App(){
   useEffect(() => { if(DROPBOX_APP_KEY) ensureDropbox().catch(()=>{}); }, []);
   const [inSettings, setInSettings] = useState(false);
   const [toast, setToast] = useState("");
-  const [update, setUpdate] = useState({ state:"", available:false });
+  const [update,setUpdate]=useState(null);   // { ver, build } of a newer deployed build, else null
+  const [updMsg,setUpdMsg]=useState("");     // inline status for the Settings "Check for updates" row
+  const updTimer = useRef(null);
 
   const showToast = (m) => { setToast(m); setTimeout(()=>setToast(""), 2200); };
 
+  // Show a status line for a few seconds then clear it (used for terminal results).
+  const flashUpd = useCallback((msg)=>{ setUpdMsg(msg); if(updTimer.current) clearTimeout(updTimer.current); updTimer.current = setTimeout(()=>setUpdMsg(""), 4000); },[]);
   // PWA self-update: fetch the deployed index.html (no-store), regex the build,
   // compare with buildIsNewer. Bump BUILD on every deploy or this never fires.
-  const checkUpdate = useCallback(async () => {
-    setUpdate(u => ({...u, state:"checking"}));
+  // manual=true is the Settings button: show inline "Checking..." then a result. On
+  // launch/resume we check quietly and only surface the banner if there's an update.
+  // Detection compares the deployed BUILD (monotonic date stamp) so it never misfires;
+  // the deployed APP_VERSION is read alongside it purely to LABEL the update ("v0.9.9").
+  const checkUpdate = useCallback(async (manual=false)=>{
+    if(manual){ if(updTimer.current) clearTimeout(updTimer.current); setUpdMsg("Checking..."); }
     try{
-      const r = await fetch(location.pathname + "?_=" + Date.now(), { cache:"no-store" });
-      const html = await r.text();
-      const m = html.match(/const BUILD = "([^"]+)"/);
-      const remote = m ? m[1] : null;
-      const vm = html.match(/const APP_VERSION = "([^"]+)"/);
-      if(remote && buildIsNewer(remote, BUILD)){ setUpdate({ state:"", available:true, version: vm ? vm[1] : "" }); }
-      else { setUpdate({ state:"current", available:false, version:"" }); }
-    }catch(e){ setUpdate({ state:"error", available:false, version:"" }); log("ERROR","checkUpdate: "+e.message); }
-  }, []);
+      const res = await fetch(location.pathname + "?_=" + Date.now(), { cache:"no-store" });
+      if(!res.ok){ log("UPDATE","check http "+res.status); if(manual) flashUpd("Couldn't check - are you online?"); return; }
+      const html = await res.text();
+      const mb = html.match(/const BUILD = "([^"]+)";/);       const rBuild = mb && mb[1];
+      const mv = html.match(/const APP_VERSION = "([^"]+)";/); const rVer = mv && mv[1];
+      if(rBuild && buildIsNewer(rBuild, BUILD)){ log("UPDATE","newer build live: "+rBuild+" (v"+(rVer||"?")+")"); setUpdate({ ver:rVer, build:rBuild }); if(manual) setUpdMsg(""); }
+      else { log("UPDATE","up to date (v"+APP_VERSION+", "+BUILD+")"); setUpdate(null); if(manual) flashUpd("You're on the latest (v"+APP_VERSION+")"); }
+    }catch(e){ log("UPDATE","check failed: "+e.message); if(manual) flashUpd("Update check failed"); }
+  },[flashUpd]);
+
+  // Apply by navigating to a build-stamped URL so iOS can't serve the cached HTML.
+  // Wipe the SW caches first so the new build can never be masked by a cached shell.
+  function applyUpdate(){
+    const stamp=(update&&update.build)||String(Date.now());
+    log("UPDATE","applying -> "+stamp);
+    try{ if(navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage("clearCache"); }catch(_){}
+    window.location.replace(location.pathname + "?u=" + encodeURIComponent(stamp));
+  }
   // Check on launch, on RESUME, and periodically while open. WHY: an installed
   // PWA is almost always resumed from the background rather than cold-launched,
   // so a launch-only check means the banner never surfaces on a phone. Debounced
@@ -2293,9 +2309,9 @@ function App(){
       const now = Date.now();
       if(now - lastCheck < MIN_GAP) return;
       lastCheck = now;
-      checkUpdate();
+      checkUpdate(false);
     };
-    const t = setTimeout(maybeCheck, 4000);     // initial launch check
+    const t = setTimeout(maybeCheck, 1200);     // initial launch check
     const onVis = () => { if(document.visibilityState === "visible") maybeCheck(); };
     document.addEventListener("visibilitychange", onVis);
     const iv = setInterval(maybeCheck, 20 * 60 * 1000);   // periodic while open
@@ -2643,15 +2659,10 @@ function App(){
 
   return (
     <div className="app">
-      {update.available &&
-        <button className="update-bar" onClick={()=>{
-            // Wipe the SW caches first so the reload can't be served a stale shell.
-            try { if(navigator.serviceWorker && navigator.serviceWorker.controller)
-                    navigator.serviceWorker.controller.postMessage("clearCache"); } catch(e){}
-            setTimeout(()=>location.reload(true), 120);
-          }}>
-          <span>A new version of HomeCaptain is ready{update.version ? " (v"+update.version+")" : ""}.</span>
-          <span className="update-go">Update</span>
+      {update &&
+        <button className="update-bar" onClick={applyUpdate}>
+          <span><Icon d={ICONS.sparkle} size={15}/> Update available <b>(v{update.ver||update.build})</b></span>
+          <span className="update-go">Refresh</span>
         </button>}
 
       <div className="topbar">
@@ -2690,7 +2701,7 @@ function App(){
 
       <div className="screen">
         {inSettings
-          ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={update.state} />
+          ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updMsg={updMsg} update={update} onApplyUpdate={applyUpdate} />
           : inHome
             ? (
                 tab==="overview" ? <HomeOverview store={store} home={activeHome} onEdit={()=>setSheet({home:activeHome})} onGoto={setTab} />
