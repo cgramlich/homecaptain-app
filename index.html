@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.16.0";
+const APP_VERSION = "0.17.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-24.6";
+const BUILD = "2026-07-24.7";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -361,7 +361,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(NS+k, JSON.stringify(v)); }
 const lsDel = (k) => { try { localStorage.removeItem(NS+k); } catch(e){} };
 
 // One per-record JSONB collection per entity (mirrors the backend COLLECTIONS).
-const FILES = ["homes","events","documents","reminders"];
+const FILES = ["homes","events","documents","reminders","systems"];
 
 /* ============================================================
    BACKEND + AUTH CONFIG
@@ -1004,7 +1004,18 @@ function useStore(){
     try{
       const next = {};
       for(const f of FILES){
-        const fresh = await collGet(f);
+        let fresh;
+        try{ fresh = await collGet(f); }
+        catch(e){
+          // A single collection failing (e.g. a table not yet created after a
+          // deploy) must not abort the whole pull and blank the other data.
+          // Keep the local copy for this one and move on. Auth errors still
+          // propagate so the session-expired path works.
+          if(/sign in|expired|401/i.test(e.message||"")) throw e;
+          log("SYNC","pull "+f+" failed ("+(e.message||"")+"); keeping local");
+          next[f] = dataRef.current[f] || lsGet("cache:"+f, []);
+          continue;
+        }
         const local = dataRef.current[f] || [];
         // HARD SAFETY NET: the local copy is authoritative whenever the server
         // has FEWER items. A pull must never SHRINK a collection - that is what
@@ -1146,6 +1157,7 @@ const ICONS = {
   eye:     ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
   eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
   trash:   ["M3 6h18","M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2","M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6","M10 11v6","M14 11v6"],
+  tool:    ["M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"],
 };
 
 /* ============================================================
@@ -1967,7 +1979,7 @@ async function openStoredFile(path, onErr){
 
 /* Add sheet opened by the center + in the bottom nav (portfolio nav standard).
    One place for every in-home create; no action is pre-highlighted. */
-function AddSheet({ onLog, onReminder, onDocs, onClose }){
+function AddSheet({ onLog, onReminder, onDocs, onNote, onClose }){
   return (
     <>
       <div className="scrim" onClick={onClose}></div>
@@ -1981,6 +1993,7 @@ function AddSheet({ onLog, onReminder, onDocs, onClose }){
           <button className="btn btn-ghost btn-block" onClick={onLog}><Icon d={ICONS.log} size={17}/> Log entry</button>
           <button className="btn btn-ghost btn-block" onClick={onReminder}><Icon d={ICONS.bell} size={17}/> Reminder</button>
           <button className="btn btn-ghost btn-block" onClick={onDocs}><Icon d={ICONS.doc} size={17}/> Documents</button>
+          <button className="btn btn-ghost btn-block" onClick={onNote}><Icon d={ICONS.tool} size={17}/> System or note</button>
         </div>
       </div>
     </>
@@ -2494,6 +2507,7 @@ function AskBox({ store, home }){
 function HomeOverview({ store, home, onEdit, onGoto, onPickPhoto, onRemovePhoto }){
   const docs   = (store.data.documents||[]).filter(d => d.home_id === home.id);
   const events = (store.data.events||[]).filter(e => e.home_id === home.id);
+  const systems= (store.data.systems||[]).filter(s => s.home_id === home.id);
   const rems   = (store.data.reminders||[]).filter(r => r.home_id === home.id && !r.doneAt);
   const overdue = rems.filter(r => remStatus(r) === "overdue").length;
   const dueSoon = rems.filter(r => { const s = remStatus(r); return s==="today" || s==="soon"; }).length;
@@ -2530,6 +2544,8 @@ function HomeOverview({ store, home, onEdit, onGoto, onPickPhoto, onRemovePhoto 
         <HubCard icon={ICONS.log}  title="Log" onClick={()=>onGoto("log")}
           sub={events.length ? events.length + (events.length===1?" entry":" entries") + (spend>0 ? " · $"+fmtNum(spend):"") : "Nothing logged"} />
         <HubCard icon={ICONS.bell} title="Reminders" onClick={()=>onGoto("remind")} sub={remSub} />
+        <HubCard icon={ICONS.tool} title="Systems & Notes" onClick={()=>onGoto("systems")}
+          sub={systems.length ? systems.length + (systems.length===1?" note":" notes") : "Equipment & reference"} />
       </div>
 
       <button className="btn btn-ghost btn-block" style={{marginTop:16}} onClick={onEdit}>
@@ -2540,13 +2556,156 @@ function HomeOverview({ store, home, onEdit, onGoto, onPickPhoto, onRemovePhoto 
 }
 
 /* ============================================================
+   SYSTEMS & NOTES (per-home reference: equipment, systems, vendors, notes).
+   Grouped by section, searchable; rows swipe to delete, tap to edit. Populated
+   by the Trello import and by manual entry.
+   ============================================================ */
+function SystemRow({ s, onEdit, onDelete }){
+  return (
+    <SwipeRow onDelete={()=>onDelete(s)}>
+      <div className="item">
+        <button className="rem-body" onClick={()=>onEdit(s)}>
+          <div className="item-title">{s.title}</div>
+          {s.notes ? <div style={{fontSize:13, color:"var(--ink-3)", marginTop:3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden"}}>{s.notes}</div> : null}
+          {(s.attachments && s.attachments.length) ?
+            <div className="item-meta"><span className="chip">{s.attachments.length} file{s.attachments.length===1?"":"s"} on Trello</span></div> : null}
+        </button>
+        <button className="rem-done" onClick={()=>onEdit(s)} aria-label="Edit">
+          <Icon d={ICONS.edit} size={16}/>
+        </button>
+      </div>
+    </SwipeRow>
+  );
+}
+
+function SystemsScreen({ store, home, onAdd, onEdit, onDelete }){
+  const [collapsed, setCollapsed] = useState({});
+  const [query, setQuery] = useState("");
+  const toggle = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+
+  const all = (store.data.systems||[]).filter(s => s.home_id === home.id);
+
+  if(!all.length){
+    return (
+      <div className="empty">
+        <div className="glyph">{"{}"}</div>
+        <h3 className="title-sm">No systems or notes yet</h3>
+        <p>Keep the reference details for {home.name} here: appliances and equipment, model numbers, vendors, warranties, and general notes. Import your Trello board or add them one at a time.</p>
+        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+          <Icon d={ICONS.plus} size={16}/> Add a note
+        </button>
+      </div>
+    );
+  }
+
+  const q = query.trim().toLowerCase();
+  const matched = q ? all.filter(s =>
+    (s.title||"").toLowerCase().includes(q) || (s.notes||"").toLowerCase().includes(q) || (s.section||"").toLowerCase().includes(q)) : all;
+
+  // Group by section (Trello list name), "General" last for un-sectioned notes.
+  const sections = [];
+  matched.forEach(s => { const k = s.section || "General"; if(!sections.includes(k)) sections.push(k); });
+  sections.sort((a,b) => a==="General" ? 1 : b==="General" ? -1 : a.localeCompare(b));
+  const groups = sections.map(k => [k, matched.filter(s => (s.section||"General") === k)
+    .sort((a,b)=> String(a.title||"").localeCompare(String(b.title||""), undefined, {numeric:true}))]);
+
+  return (
+    <div>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+        <div className="log-summary">
+          {q ? matched.length + " of " + all.length + " match" : all.length + (all.length===1?" note":" notes")}
+        </div>
+        <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
+      </div>
+
+      <div className="doc-tools">
+        <input className="input" value={query} onChange={e=>setQuery(e.target.value)}
+          placeholder="Search systems & notes" aria-label="Search" />
+      </div>
+
+      {!groups.length &&
+        <div className="empty" style={{padding:"40px 20px"}}><p>Nothing matches "{query}".</p></div>}
+
+      {groups.map(g => {
+        const open = q ? true : !collapsed[g[0]];
+        return (
+          <div key={g[0]}>
+            <button className="doc-group" onClick={()=>toggle(g[0])} aria-expanded={open}>
+              <span className="doc-group-title">{g[0]}</span>
+              <span className="doc-group-count">{g[1].length}</span>
+              <span className={"doc-group-chev"+(open?" open":"")}><Icon d={ICONS.chev} size={16}/></span>
+            </button>
+            {open &&
+              <div className="list" style={{marginTop:0}}>
+                {g[1].map(s => <SystemRow key={s.id} s={s} onEdit={onEdit} onDelete={onDelete} />)}
+              </div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SystemSheet({ system, homeId, onSave, onDelete, onClose }){
+  const s = system || {};
+  const [title, setTitle] = useState(s.title || "");
+  const [section, setSection] = useState(s.section || "");
+  const [notes, setNotes] = useState(s.notes || "");
+  const save = () => {
+    const t = title.trim();
+    if(!t) return;
+    const now = nowISO();
+    onSave({
+      ...s,
+      id: s.id || uid(), home_id: s.home_id || homeId,
+      title: t, section: section.trim(), notes: notes.trim(),
+      attachments: s.attachments || [],
+      source: s.source || "manual",
+      createdAt: s.createdAt || now, updatedAt: now,
+    });
+  };
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{system ? "Edit note" : "Add a note"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <label className="field-label">Title</label>
+        <input className="input" value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. Generac 24kW generator" />
+        <label className="field-label">Section</label>
+        <input className="input" value={section} onChange={e=>setSection(e.target.value)} placeholder="e.g. Heating, Propane & Generator" />
+        <label className="field-label">Details</label>
+        <textarea className="input" style={{minHeight:110, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
+          placeholder="Model numbers, install date, vendor, warranty, anything worth remembering." />
+        <button className="btn btn-primary btn-block" style={{marginTop:14}} disabled={!title.trim()} onClick={save}>
+          {system ? "Save changes" : "Add note"}
+        </button>
+        {system &&
+          <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>onDelete(system)}>
+            <Icon d={ICONS.trash} size={15}/> Delete
+          </button>}
+      </div>
+    </>
+  );
+}
+
+/* ============================================================
    APP SHELL
    ============================================================ */
+const TRELLO_GROUPS = [
+  { type:"log",      label:"Log entries",     hint:"work done & spending" },
+  { type:"reminder", label:"Reminders",       hint:"to-dos & upkeep" },
+  { type:"system",   label:"Systems & Notes", hint:"equipment & reference" },
+];
 function TrelloReviewSheet({ review, onImport, onClose }){
   const entries = review.entries || [];
   const [sel, setSel] = useState(() => entries.map((_,i)=>i));
   const toggle = (i) => setSel(s => s.includes(i) ? s.filter(x=>x!==i) : [...s, i]);
   const chosen = entries.filter((_,i)=>sel.includes(i));
+  const att = review.attach || { total:0, inDocs:0, missing:[] };
   return (
     <>
       <div className="scrim" onClick={onClose}></div>
@@ -2557,50 +2716,70 @@ function TrelloReviewSheet({ review, onImport, onClose }){
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <div className="hint" style={{marginBottom:10}}>
-          {entries.length} {entries.length===1?"entry":"entries"} drafted from {review.boardName||"the board"}.
-          {review.attachmentCount>0 ? " "+review.attachmentCount+" attachment"+(review.attachmentCount===1?"":"s")+" on the board - bring those in with folder import." : ""}
+          {entries.length} {entries.length===1?"card":"cards"} sorted from {review.boardName||"the board"}. Uncheck anything you don't want.
+          {att.total>0 ? " " + att.total + " attachment" + (att.total===1?"":"s") + " on the board: " +
+            att.inDocs + " already in your Documents, " + att.missing.length + " to download from Trello." : ""}
         </div>
         <div style={{display:"flex", gap:12, marginBottom:8}}>
           <button className="assist-toggle" onClick={()=>setSel(entries.map((_,i)=>i))}>Select all</button>
           <button className="assist-toggle" onClick={()=>setSel([])}>Clear</button>
         </div>
-        <div className="list" style={{maxHeight:"46vh", overflowY:"auto", marginTop:0}}>
-          {entries.map((en,i) => {
-            const on = sel.includes(i);
+        <div className="list" style={{maxHeight:"44vh", overflowY:"auto", marginTop:0}}>
+          {TRELLO_GROUPS.map(g => {
+            const items = entries.map((en,i)=>[en,i]).filter(([en]) => (en.type||"system") === g.type);
+            if(!items.length) return null;
             return (
-              <button key={i} className={"item"+(on?"":" muted")} onClick={()=>toggle(i)}>
-                <span className="rem-done" style={on?{background:"var(--amber-dim)",color:"var(--amber)",borderColor:"var(--amber-line)"}:{}}>
-                  <Icon d={on?ICONS.check:ICONS.plus} size={15}/>
-                </span>
-                <div className="item-body">
-                  <div className="item-title">{en.title}</div>
-                  <div className="item-meta">
-                    <span className={"chip "+catClass(en.category)}>{en.category}</span>
-                    {en.date && <span className="chip">{fmtDate(en.date)}</span>}
-                    {en.amount!=null && <span className="chip">${fmtNum(en.amount)}</span>}
-                    {en.vendor && <span className="chip">{en.vendor}</span>}
-                  </div>
+              <div key={g.type}>
+                <div className="doc-group" style={{cursor:"default"}}>
+                  <span className="doc-group-title">{g.label}</span>
+                  <span className="doc-group-count">{items.length}</span>
+                  <span style={{fontSize:11.5, color:"var(--ink-3)", marginLeft:8}}>{g.hint}</span>
                 </div>
-              </button>
+                {items.map(([en,i]) => {
+                  const on = sel.includes(i);
+                  return (
+                    <button key={i} className={"item"+(on?"":" muted")} onClick={()=>toggle(i)}>
+                      <span className="rem-done" style={on?{background:"var(--amber-dim)",color:"var(--amber)",borderColor:"var(--amber-line)"}:{}}>
+                        <Icon d={on?ICONS.check:ICONS.plus} size={15}/>
+                      </span>
+                      <div className="item-body">
+                        <div className="item-title">{en.title}</div>
+                        <div className="item-meta">
+                          {g.type==="log" && <span className={"chip "+catClass(en.category)}>{en.category}</span>}
+                          {en.date && <span className="chip">{fmtDate(en.date)}</span>}
+                          {en.dueDate && <span className="chip">due {fmtDate(en.dueDate)}</span>}
+                          {en.amount!=null && <span className="chip">${fmtNum(en.amount)}</span>}
+                          {en.vendor && <span className="chip">{en.vendor}</span>}
+                          {g.type==="system" && en.section && <span className="chip">{en.section}</span>}
+                          {en.attachments && en.attachments.length ? <span className="chip">{en.attachments.length} file{en.attachments.length===1?"":"s"}</span> : null}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             );
           })}
         </div>
         <button className="btn btn-primary btn-block" style={{marginTop:12}} disabled={!chosen.length}
           onClick={()=>onImport(chosen, review.homeId)}>
-          Import {chosen.length} {chosen.length===1?"entry":"entries"}
+          Import {chosen.length} {chosen.length===1?"item":"items"}
         </button>
       </div>
     </>
   );
 }
 
-// Section tabs shown INSIDE a home. The houses list is the level above these.
+// Section tabs shown INSIDE a home in the bottom nav. The houses list is the
+// level above these. "systems" is a full section too but reached from the
+// overview hub card (kept out of the 4-slot bottom nav), so it has a label here.
 const HOME_TABS = [
   { key:"overview", label:"Home",      icon:ICONS.home },
   { key:"docs",     label:"Docs",      icon:ICONS.doc  },
   { key:"log",      label:"Log",       icon:ICONS.log  },
   { key:"remind",   label:"Reminders", icon:ICONS.bell },
 ];
+const SECTION_LABELS = { overview:"Home", docs:"Docs", log:"Log", remind:"Reminders", systems:"Systems & Notes" };
 
 function App(){
   const store = useStore();
@@ -2611,6 +2790,7 @@ function App(){
   const [eventSheet, setEventSheet] = useState(null);   // null | {event}
   const [remSheet, setRemSheet] = useState(null);       // null | {reminder, preset}
   const [docSheet, setDocSheet] = useState(null);       // null | {doc}
+  const [sysSheet, setSysSheet] = useState(null);       // null | {system}
   const [docBusy, setDocBusy] = useState("");           // "" | "Adding 3 of 16..."
   const [importOpen, setImportOpen] = useState(false);
   const [trelloReview, setTrelloReview] = useState(null);
@@ -2942,22 +3122,75 @@ function App(){
       const res = await parseTrello(cards);
       const entries = (res && res.entries) || [];
       setDocBusy("");
-      if(!entries.length){ showToast("No home-work cards to import from that board."); return; }
-      const attachmentCount = new Set(cards.flatMap(c => c.attachments)).size;
-      setTrelloReview({ entries, homeId: ah.id, boardName: json.name || "Trello board", attachmentCount });
+      if(!entries.length){ showToast("No cards to import from that board."); return; }
+      // Re-attach each card's attachment filenames to its entry (matched by the
+      // model-echoed original card name), so the review + Systems notes can show them.
+      const byName = {}; cards.forEach(c => { byName[(c.name||"").trim().toLowerCase()] = c; });
+      entries.forEach(en => {
+        const c = byName[String(en.card||en.title||"").trim().toLowerCase()];
+        en.attachments = (c && c.attachments) ? c.attachments.slice(0,20) : [];
+      });
+      // Cross-check every attachment filename against this home's existing docs.
+      const existing = (store.data.documents||[]).filter(d => d.home_id === ah.id);
+      const haveKeys = new Set(existing.map(d => docNameKey(d)));
+      const allAttach = Array.from(new Set(cards.flatMap(c => c.attachments || [])));
+      const missing = allAttach.filter(n => !haveKeys.has(docNameKey(n)));
+      const attach = { total: allAttach.length, inDocs: allAttach.length - missing.length, missing };
+      setTrelloReview({ entries, homeId: ah.id, boardName: json.name || "Trello board", attach });
     }catch(err){ setDocBusy(""); log("ERROR","trello: "+err.message); showToast(err.message || "Couldn't read that board."); }
   };
   const importTrelloEntries = (chosen, homeId) => {
     const now = nowISO();
-    const events = chosen.map(en => ({
-      id: uid(), home_id: homeId, title: en.title, category: en.category || "Other",
-      date: en.date || todayStr(), cost: en.amount!=null ? en.amount : null,
-      vendor: en.vendor || "", notes: en.notes || "", photos: [], receipt: null,
-      createdAt: now, updatedAt: now, source: "trello",
-    }));
-    store.saveCollection("events", [...events, ...(store.data.events||[])]);
+    const mkNotes = (en) => en.attachments && en.attachments.length
+      ? ((en.notes ? en.notes + "\n\n" : "") + "Trello attachments: " + en.attachments.join(", "))
+      : (en.notes || "");
+    const events = [], reminders = [], systems = [];
+    chosen.forEach(en => {
+      const type = en.type || "system";
+      if(type === "log"){
+        events.push({
+          id: uid(), home_id: homeId, title: en.title, category: en.category || "Other",
+          date: en.date || todayStr(), cost: en.amount!=null ? en.amount : null,
+          vendor: en.vendor || "", notes: mkNotes(en), photos: [], receipt: null,
+          createdAt: now, updatedAt: now, source: "trello",
+        });
+      } else if(type === "reminder"){
+        reminders.push({
+          id: uid(), home_id: homeId, title: en.title, category: en.category || "Maintenance",
+          dueDate: en.dueDate || todayStr(), repeat: false, every: 1, unit: "months",
+          notes: mkNotes(en), doneAt: null, createdAt: now, updatedAt: now, source: "trello",
+        });
+      } else {
+        systems.push({
+          id: uid(), home_id: homeId, title: en.title, section: en.section || "General",
+          notes: en.notes || "", attachments: en.attachments || [],
+          createdAt: now, updatedAt: now, source: "trello",
+        });
+      }
+    });
+    if(events.length)    store.saveCollection("events",    [...events,    ...(store.data.events||[])]);
+    if(reminders.length) store.saveCollection("reminders", [...reminders, ...(store.data.reminders||[])]);
+    if(systems.length)   store.saveCollection("systems",   [...systems,   ...(store.data.systems||[])]);
     setTrelloReview(null);
-    showToast(events.length + " imported to the Log");
+    const parts = [];
+    if(events.length)    parts.push(events.length + " to Log");
+    if(reminders.length) parts.push(reminders.length + " to Reminders");
+    if(systems.length)   parts.push(systems.length + " to Systems");
+    showToast("Imported " + (parts.join(", ") || "nothing"));
+  };
+
+  // ---- systems & notes ----
+  const saveSystem = (rec) => {
+    const list = store.data.systems || [];
+    const next = list.some(s => s.id === rec.id) ? list.map(s => s.id===rec.id ? rec : s) : [rec, ...list];
+    store.saveCollection("systems", next);
+    setSysSheet(null);
+    showToast(list.some(s => s.id === rec.id) ? "Note updated" : "Note added");
+  };
+  const deleteSystem = (s) => {
+    store.saveCollection("systems", (store.data.systems||[]).filter(x => x.id !== s.id));
+    setSysSheet(null);
+    showToast("Note deleted");
   };
 
   // ---- home photo ----
@@ -3163,7 +3396,7 @@ function App(){
               <div style={{display:"flex", alignItems:"center", gap:8, minWidth:0}}>
                 <button className="backbtn" onClick={backToHouses} aria-label="All homes"><Icon d={ICONS.back} size={19}/></button>
                 <div style={{minWidth:0}}>
-                  <div className="eyebrow">{HOME_TABS.find(t=>t.key===tab).label}</div>
+                  <div className="eyebrow">{SECTION_LABELS[tab] || "Home"}</div>
                   <h1 className="title" style={{whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{activeHome.name}</h1>
                 </div>
               </div>
@@ -3199,6 +3432,9 @@ function App(){
               : tab==="log"      ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})}
                                      onAddReceipt={pickReceipt} onImportTrello={pickTrello}
                                      onDelete={(e)=>{ if(confirm("Delete this log entry?")) deleteEvent(e.id); }} />
+              : tab==="systems"  ? <SystemsScreen store={store} home={activeHome}
+                                     onAdd={()=>setSysSheet({system:null})} onEdit={(s)=>setSysSheet({system:s})}
+                                     onDelete={(s)=>{ if(confirm("Delete this note?")) deleteSystem(s); }} />
               :                    <RemindersScreen store={store} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
                                      onEdit={(r)=>setRemSheet({reminder:r, preset:null})}
@@ -3258,6 +3494,7 @@ function App(){
           onLog={()=>{ setAddSheet(false); setEventSheet({event:null}); }}
           onReminder={()=>{ setAddSheet(false); setRemSheet({reminder:null, preset:null}); }}
           onDocs={()=>{ setAddSheet(false); openImport(); }}
+          onNote={()=>{ setAddSheet(false); setSysSheet({system:null}); }}
           onClose={()=>setAddSheet(false)} />}
 
       {sheet &&
@@ -3268,6 +3505,10 @@ function App(){
 
       {trelloReview &&
         <TrelloReviewSheet review={trelloReview} onImport={importTrelloEntries} onClose={()=>setTrelloReview(null)} />}
+
+      {sysSheet && activeHome &&
+        <SystemSheet system={sysSheet.system} homeId={activeHome.id}
+          onSave={saveSystem} onDelete={deleteSystem} onClose={()=>setSysSheet(null)} />}
 
       {remSheet && activeHome &&
         <ReminderSheet reminder={remSheet.reminder} preset={remSheet.preset} homeId={activeHome.id}

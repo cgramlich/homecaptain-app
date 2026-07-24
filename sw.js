@@ -26,7 +26,7 @@
    - everything else (photo signed URLs, other API, writes) -> default network
 */
 
-const VERSION      = "0.16.0";                 // keep in lockstep with APP_VERSION
+const VERSION      = "0.17.0";                 // keep in lockstep with APP_VERSION
 const SHELL_CACHE  = "hc-shell-" + VERSION;
 const ASSET_CACHE  = "hc-assets-" + VERSION;
 const DATA_CACHE   = "hc-data-v1";            // user collections; UN-versioned so it
