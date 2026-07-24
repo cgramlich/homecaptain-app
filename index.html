@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.20.0";
+const APP_VERSION = "0.21.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-24.12";
+const BUILD = "2026-07-24.13";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1650,7 +1650,9 @@ function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
   const [id] = useState(() => (seed && seed.id) || uid());
   const [title, setTitle] = useState(seed ? (seed.title||"") : "");
   const [category, setCategory] = useState(seed ? (seed.category||"Repair") : "Repair");
-  const [date, setDate] = useState(seed ? (seed.date||todayStr()) : todayStr());
+  // An EXISTING entry keeps what it has, including NO date (an imported card whose
+  // source carried none) - opening it must not silently stamp it with today.
+  const [date, setDate] = useState(event ? (event.date||"") : (seed ? (seed.date||todayStr()) : todayStr()));
   const [cost, setCost] = useState(seed && seed.cost!=null ? String(seed.cost) : "");
   const [vendor, setVendor] = useState(seed ? (seed.vendor||"") : "");
   const [notes, setNotes] = useState(seed ? (seed.notes||"") : "");
@@ -1680,7 +1682,7 @@ function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
   const save = () => {
     if(!title.trim()) return;
     onSave({
-      id, home_id: homeId, title: title.trim(), category, date,
+      id, home_id: homeId, title: title.trim(), category, date: date || null,
       cost: cost.trim()==="" ? null : (Number(cost) || 0),
       vendor: vendor.trim(), notes: notes.trim(), photos,
       receipt: receipt || (event ? event.receipt : null) || null,
@@ -1765,10 +1767,14 @@ function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
   );
 }
 
-function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImportTrello }){
+function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImportTrello, onClearImportedDates }){
   const events = (store.data.events||[])
     .filter(e => e.home_id === home.id)
     .sort((a,b)=> String(b.date||"").localeCompare(String(a.date||"")) || String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
+  // Entries imported before v0.21.0 were stamped with the import date because
+  // there was no "no date" state. Same detection as the Reminders screen.
+  const misdated = events.filter(e => e.source === "trello" && e.date && e.createdAt &&
+                                      e.date === String(e.createdAt).slice(0,10));
   if(!events.length){
     return (
       <div className="empty">
@@ -1791,6 +1797,12 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImpor
           <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onImportTrello}>Import Trello</button>
         </div>
       </div>
+      {misdated.length > 0 &&
+        <div className="hint" style={{marginBottom:6}}>
+          {misdated.length} imported {misdated.length===1?"entry":"entries"} got today's date because the source card had none.{" "}
+          <button className="assist-toggle" style={{marginTop:0}}
+            onClick={()=>onClearImportedDates("events","date",misdated)}>Clear {misdated.length} imported date{misdated.length===1?"":"s"}</button>
+        </div>}
       <div className="list">
         {events.map(e => (
           <SwipeRow key={e.id} onDelete={()=>onDelete(e)}>
@@ -1799,7 +1811,8 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImpor
                 <div className="item-title">{e.title}</div>
                 <div className="item-meta">
                   <span className={"chip "+catClass(e.category)}>{e.category}</span>
-                  {e.date && <span className="chip">{fmtDate(e.date)}</span>}
+                  {e.date ? <span className="chip">{fmtDate(e.date)}</span>
+                          : <span className="chip">No date</span>}
                   {(e.cost!=null && e.cost!=="") && <span className="chip">${fmtNum(e.cost)}</span>}
                   {e.vendor && <span className="chip">{e.vendor}</span>}
                   {e.receipt && <span className="chip">receipt</span>}
@@ -1993,7 +2006,7 @@ function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete, onC
         </div>
         {misdated.length > 0 &&
           <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}}
-            onClick={()=>onClearImportedDates(misdated)}>Clear {misdated.length} imported date{misdated.length===1?"":"s"}</button>}
+            onClick={()=>onClearImportedDates("reminders","dueDate",misdated)}>Clear {misdated.length} imported date{misdated.length===1?"":"s"}</button>}
       </div>
       {misdated.length > 0 &&
         <div className="hint" style={{marginBottom:6}}>
@@ -3237,7 +3250,7 @@ function App(){
       if(type === "log"){
         events.push({
           id: uid(), home_id: homeId, title: en.title, category: en.category || "Other",
-          date: en.date || todayStr(), cost: en.amount!=null ? en.amount : null,
+          date: en.date || null, cost: en.amount!=null ? en.amount : null,
           vendor: en.vendor || "", notes: mkNotes(en), photos: [], receipt: null,
           createdAt: now, updatedAt: now, source: "trello",
         });
@@ -3268,16 +3281,18 @@ function App(){
     showToast("Imported " + (parts.join(", ") || "nothing"));
   };
 
-  // Drop the placeholder due date off imported reminders that never had one.
-  const clearImportedDates = (list) => {
+  // Drop the placeholder date off imported records whose source card never had
+  // one. Used by both the Reminders screen (dueDate) and the Log (date).
+  const clearImportedDates = (coll, field, list) => {
     if(!list.length) return;
-    if(!confirm("Clear the due date on " + list.length + " imported reminder" + (list.length===1?"":"s") +
-                "? They move to \"No date set\" - nothing is deleted, and you can set real dates any time.")) return;
+    const what = coll === "events" ? "log entr" + (list.length===1?"y":"ies") : "reminder" + (list.length===1?"":"s");
+    if(!confirm("Clear the date on " + list.length + " imported " + what +
+                "? They move to \"No date\" - nothing is deleted, and you can set real dates any time.")) return;
     const ids = new Set(list.map(r => r.id));
     const now = nowISO();
-    store.saveCollection("reminders", (store.data.reminders||[])
-      .map(r => ids.has(r.id) ? {...r, dueDate:null, updatedAt:now} : r));
-    showToast(list.length + " moved to \"No date set\"");
+    store.saveCollection(coll, (store.data[coll]||[])
+      .map(r => ids.has(r.id) ? {...r, [field]:null, updatedAt:now} : r));
+    showToast(list.length + " moved to \"No date\"");
   };
 
   // ---- systems & notes ----
@@ -3532,6 +3547,7 @@ function App(){
                                      onDelete={(d)=>{ if(confirm("Delete this document? The file is removed from storage.")) deleteDoc(d); }} />
               : tab==="log"      ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})}
                                      onAddReceipt={pickReceipt} onImportTrello={pickTrello}
+                                     onClearImportedDates={clearImportedDates}
                                      onDelete={(e)=>{ if(confirm("Delete this log entry?")) deleteEvent(e.id); }} />
               : tab==="systems"  ? <SystemsScreen store={store} home={activeHome}
                                      onAdd={()=>setSysSheet({system:null})} onEdit={(s)=>setSysSheet({system:s})}
