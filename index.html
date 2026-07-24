@@ -505,6 +505,44 @@ async function parseReceipt(path){
   }
   return await r.json();   // { fields: {title,vendor,date,amount,category,notes} }
 }
+// Batch-parse Trello cards into drafted log entries.
+async function parseTrello(cards){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/trello/parse", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ cards })
+  });
+  if(!r.ok){
+    let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
+    if(r.status===402 || r.status===429) throw new Error(detail || "AI is at its limit for now. Try again later.");
+    if(r.status===503) throw new Error(detail || "AI is temporarily unavailable.");
+    throw new Error(detail || ("Couldn't read that board ("+r.status+")."));
+  }
+  return await r.json();   // { entries: [...] }
+}
+// Pull the useful bits out of a Trello board's "Export as JSON". Returns null if
+// it doesn't look like a Trello export. Attaches each card's comments + the
+// names of its attachments (the files come in separately).
+function extractTrelloCards(json){
+  if(!json || !Array.isArray(json.cards)) return null;
+  const comments = {};
+  (json.actions||[]).forEach(a => {
+    if(a && a.type==="commentCard" && a.data && a.data.card && a.data.text){
+      (comments[a.data.card.id] = comments[a.data.card.id] || []).push(a.data.text);
+    }
+  });
+  const lists = {}; (json.lists||[]).forEach(l => { lists[l.id] = l.name; });
+  return json.cards.filter(c => c && !c.closed).map(c => ({
+    name: c.name || "",
+    desc: c.desc || "",
+    due: c.due || null,
+    list: lists[c.idList] || "",
+    comments: comments[c.id] || [],
+    attachments: (c.attachments||[]).map(a => a && a.name).filter(Boolean),
+  }));
+}
 async function deleteFile(path){
   const token = await authToken();
   if(!token) return;
@@ -1638,7 +1676,7 @@ function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
   );
 }
 
-function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt }){
+function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImportTrello }){
   const events = (store.data.events||[])
     .filter(e => e.home_id === home.id)
     .sort((a,b)=> String(b.date||"").localeCompare(String(a.date||"")) || String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
@@ -1650,6 +1688,7 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt }){
         <p>Log a repair, maintenance job, improvement, or inspection for {home.name} — with photos and cost.</p>
         <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}><Icon d={ICONS.plus} size={16}/> Log an entry</button>
         <button className="btn btn-ghost" style={{marginTop:10}} onClick={onAddReceipt}><Icon d={ICONS.doc} size={16}/> Add from a receipt</button>
+        <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}><Icon d={ICONS.upload} size={16}/> Import from Trello</button>
       </div>
     );
   }
@@ -1658,7 +1697,10 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt }){
     <div>
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
         <div className="log-summary">{events.length} {events.length===1?"entry":"entries"}{total>0 ? " · $"+fmtNum(total)+" total" : ""}</div>
-        <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAddReceipt}>Add from receipt</button>
+        <div style={{display:"flex", gap:12}}>
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAddReceipt}>Add receipt</button>
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onImportTrello}>Import Trello</button>
+        </div>
       </div>
       <div className="list">
         {events.map(e => (
@@ -2372,6 +2414,58 @@ function HomeOverview({ store, home, onEdit, onGoto }){
 /* ============================================================
    APP SHELL
    ============================================================ */
+function TrelloReviewSheet({ review, onImport, onClose }){
+  const entries = review.entries || [];
+  const [sel, setSel] = useState(() => entries.map((_,i)=>i));
+  const toggle = (i) => setSel(s => s.includes(i) ? s.filter(x=>x!==i) : [...s, i]);
+  const chosen = entries.filter((_,i)=>sel.includes(i));
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Import from Trello</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <div className="hint" style={{marginBottom:10}}>
+          {entries.length} {entries.length===1?"entry":"entries"} drafted from {review.boardName||"the board"}.
+          {review.attachmentCount>0 ? " "+review.attachmentCount+" attachment"+(review.attachmentCount===1?"":"s")+" on the board - bring those in with folder import." : ""}
+        </div>
+        <div style={{display:"flex", gap:12, marginBottom:8}}>
+          <button className="assist-toggle" onClick={()=>setSel(entries.map((_,i)=>i))}>Select all</button>
+          <button className="assist-toggle" onClick={()=>setSel([])}>Clear</button>
+        </div>
+        <div className="list" style={{maxHeight:"46vh", overflowY:"auto", marginTop:0}}>
+          {entries.map((en,i) => {
+            const on = sel.includes(i);
+            return (
+              <button key={i} className={"item"+(on?"":" muted")} onClick={()=>toggle(i)}>
+                <span className="rem-done" style={on?{background:"var(--amber-dim)",color:"var(--amber)",borderColor:"var(--amber-line)"}:{}}>
+                  <Icon d={on?ICONS.check:ICONS.plus} size={15}/>
+                </span>
+                <div className="item-body">
+                  <div className="item-title">{en.title}</div>
+                  <div className="item-meta">
+                    <span className={"chip "+catClass(en.category)}>{en.category}</span>
+                    {en.date && <span className="chip">{fmtDate(en.date)}</span>}
+                    {en.amount!=null && <span className="chip">${fmtNum(en.amount)}</span>}
+                    {en.vendor && <span className="chip">{en.vendor}</span>}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <button className="btn btn-primary btn-block" style={{marginTop:12}} disabled={!chosen.length}
+          onClick={()=>onImport(chosen, review.homeId)}>
+          Import {chosen.length} {chosen.length===1?"entry":"entries"}
+        </button>
+      </div>
+    </>
+  );
+}
+
 // Section tabs shown INSIDE a home. The houses list is the level above these.
 const HOME_TABS = [
   { key:"overview", label:"Home",      icon:ICONS.home },
@@ -2391,11 +2485,13 @@ function App(){
   const [docSheet, setDocSheet] = useState(null);       // null | {doc}
   const [docBusy, setDocBusy] = useState("");           // "" | "Adding 3 of 16..."
   const [importOpen, setImportOpen] = useState(false);
+  const [trelloReview, setTrelloReview] = useState(null);
   const [importHomeId, setImportHomeId] = useState(null);
   const docFileRef = useRef(null);
   const docPhotoRef = useRef(null);
   const docDirRef = useRef(null);
   const receiptFileRef = useRef(null);
+  const trelloFileRef = useRef(null);
   // webkitdirectory can't be set through JSX reliably, so stamp it on the hidden
   // folder input after mount. `directory` covers Firefox. This makes the picker
   // choose a FOLDER and return every file down the tree (desktop browsers only;
@@ -2696,6 +2792,43 @@ function App(){
     const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
     if(file && ah) addReceiptDraft(file, ah.id);
   };
+
+  // ---- Trello board import (JSON export -> draft log entries) ----
+  const pickTrello = () => { if(trelloFileRef.current) trelloFileRef.current.click(); };
+  const onTrelloFile = async (e) => {
+    const file = (e.target.files||[])[0];
+    e.target.value = "";
+    if(!file) return;
+    const homes = store.data.homes || [];
+    const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
+    if(!ah) return;
+    setDocBusy("Reading board…");
+    try{
+      const text = await file.text();
+      let json; try{ json = JSON.parse(text); }catch(_){ setDocBusy(""); showToast("That isn't a Trello JSON export."); return; }
+      const cards = extractTrelloCards(json);
+      if(!cards){ setDocBusy(""); showToast("No cards found. Use Trello's Export as JSON."); return; }
+      if(!cards.length){ setDocBusy(""); showToast("That board has no cards."); return; }
+      const res = await parseTrello(cards);
+      const entries = (res && res.entries) || [];
+      setDocBusy("");
+      if(!entries.length){ showToast("No home-work cards to import from that board."); return; }
+      const attachmentCount = new Set(cards.flatMap(c => c.attachments)).size;
+      setTrelloReview({ entries, homeId: ah.id, boardName: json.name || "Trello board", attachmentCount });
+    }catch(err){ setDocBusy(""); log("ERROR","trello: "+err.message); showToast(err.message || "Couldn't read that board."); }
+  };
+  const importTrelloEntries = (chosen, homeId) => {
+    const now = nowISO();
+    const events = chosen.map(en => ({
+      id: uid(), home_id: homeId, title: en.title, category: en.category || "Other",
+      date: en.date || todayStr(), cost: en.amount!=null ? en.amount : null,
+      vendor: en.vendor || "", notes: en.notes || "", photos: [], receipt: null,
+      createdAt: now, updatedAt: now, source: "trello",
+    }));
+    store.saveCollection("events", [...events, ...(store.data.events||[])]);
+    setTrelloReview(null);
+    showToast(events.length + " imported to the Log");
+  };
   // Open the import sheet aimed at the currently active home.
   const openImport = () => {
     const homes = store.data.homes || [];
@@ -2905,7 +3038,7 @@ function App(){
               : tab==="docs"     ? <DocsScreen store={store} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} onResort={()=>resortDocs(activeHome)}
                                      onDelete={(d)=>{ if(confirm("Delete this document? The file is removed from storage.")) deleteDoc(d); }} />
               : tab==="log"      ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})}
-                                     onAddReceipt={pickReceipt}
+                                     onAddReceipt={pickReceipt} onImportTrello={pickTrello}
                                      onDelete={(e)=>{ if(confirm("Delete this log entry?")) deleteEvent(e.id); }} />
               :                    <RemindersScreen store={store} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
@@ -2925,6 +3058,7 @@ function App(){
       <input ref={docPhotoRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={onDocFiles} />
       <input ref={docDirRef} type="file" multiple style={{display:"none"}} onChange={onDocFiles} />
       <input ref={receiptFileRef} type="file" accept="application/pdf,image/*" style={{display:"none"}} onChange={onReceiptFile} />
+      <input ref={trelloFileRef} type="file" accept="application/json,.json" style={{display:"none"}} onChange={onTrelloFile} />
       {docBusy && <div className="toast">{docBusy}</div>}
 
       {importOpen && activeHome &&
@@ -2971,6 +3105,9 @@ function App(){
 
       {eventSheet && activeHome &&
         <EventSheet event={eventSheet.event} draft={eventSheet.draft} homeId={activeHome.id} onSave={saveEvent} onDelete={deleteEvent} onClose={()=>setEventSheet(null)} />}
+
+      {trelloReview &&
+        <TrelloReviewSheet review={trelloReview} onImport={importTrelloEntries} onClose={()=>setTrelloReview(null)} />}
 
       {remSheet && activeHome &&
         <ReminderSheet reminder={remSheet.reminder} preset={remSheet.preset} homeId={activeHome.id}
