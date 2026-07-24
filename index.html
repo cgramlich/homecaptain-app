@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.19.0";
+const APP_VERSION = "0.19.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-24.10";
+const BUILD = "2026-07-24.11";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -556,6 +556,30 @@ async function askHome(question, context){
 // Pull the useful bits out of a Trello board's "Export as JSON". Returns null if
 // it doesn't look like a Trello export. Attaches each card's comments + the
 // names of its attachments (the files come in separately).
+// Read a text file that CLAIMS to be JSON. A .json extension guarantees nothing:
+// the bytes can be UTF-16 (Windows "Save As" / PowerShell redirects), carry a
+// UTF-8 BOM, or be a saved web page. Decode by byte-order mark rather than
+// assuming UTF-8, then strip the BOM so JSON.parse doesn't choke on it.
+async function readTextFile(file){
+  const buf = await file.arrayBuffer();
+  const b = new Uint8Array(buf.slice(0, 4));
+  let enc = "utf-8";
+  if(b[0]===0xFF && b[1]===0xFE)      enc = "utf-16le";
+  else if(b[0]===0xFE && b[1]===0xFF) enc = "utf-16be";
+  let text;
+  try{ text = new TextDecoder(enc).decode(buf); }
+  catch(e){ text = new TextDecoder("utf-8").decode(buf); }
+  return text.replace(/^\uFEFF/, "").trim();
+}
+// Say what a non-JSON file actually looks like, instead of "not valid JSON".
+function describeBadJson(text, err){
+  if(!text) return "That file is empty.";
+  if(/^<!?\s*[a-z]/i.test(text))
+    return "That's a saved web page, not a Trello export. In Trello: Board menu, Print/export/share, Export as JSON - then save the file it downloads (don't use Save Page As on the preview).";
+  const head = text.slice(0, 48).replace(/\s+/g, " ");
+  return "Couldn't read that as JSON - it starts with: " + head;
+}
+
 // Pull a normalized card list out of whatever shape Trello handed us. Trello's
 // "Export as JSON" varies: a full board ({cards,lists,actions,name}), a bare
 // array of cards, a single-card export ({name,desc,idList,...}), or the board
@@ -3167,8 +3191,15 @@ function App(){
     if(!ah) return;
     setDocBusy("Reading board…");
     try{
-      const text = await file.text();
-      let json; try{ json = JSON.parse(text); }catch(_){ setDocBusy(""); showToast("That file isn't valid JSON. In Trello: Board menu, Print/export/share, Export as JSON."); return; }
+      const text = await readTextFile(file);
+      let json;
+      try{ json = JSON.parse(text); }
+      catch(err){
+        setDocBusy("");
+        log("ERROR", "trello json: " + err.message + " | " + file.size + " bytes | starts: " + text.slice(0,120));
+        showToast(describeBadJson(text, err));
+        return;
+      }
       const { cards, diag } = extractTrelloCards(json);
       if(!cards){ setDocBusy(""); showToast("Couldn't find Trello cards in that file (" + diag + "). Use the board's Export as JSON."); return; }
       if(!cards.length){ setDocBusy(""); showToast("That board has no open cards to import."); return; }
