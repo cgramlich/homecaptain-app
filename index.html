@@ -304,9 +304,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.11.1";
+const APP_VERSION = "0.12.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-24.1";
+const BUILD = "2026-07-24.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -484,6 +484,23 @@ async function extractDocument(path){
     throw new Error(detail || ("Couldn't read that document ("+r.status+")."));
   }
   return await r.json();
+}
+// Read a stored receipt and get back drafted log-entry fields.
+async function parseReceipt(path){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/receipt/parse", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ path })
+  });
+  if(!r.ok){
+    let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
+    if(r.status===402 || r.status===429) throw new Error(detail || "AI is at its limit for now. Try again later.");
+    if(r.status===503) throw new Error(detail || "AI is temporarily unavailable.");
+    throw new Error(detail || ("Couldn't read that receipt ("+r.status+")."));
+  }
+  return await r.json();   // { fields: {title,vendor,date,amount,category,notes} }
 }
 async function deleteFile(path){
   const token = await authToken();
@@ -1498,15 +1515,17 @@ function StoredImg({ path, onRemove }){
   );
 }
 
-function EventSheet({ event, homeId, onSave, onDelete, onClose }){
-  const [id] = useState(() => event ? event.id : uid());
-  const [title, setTitle] = useState(event ? event.title : "");
-  const [category, setCategory] = useState(event ? (event.category||"Repair") : "Repair");
-  const [date, setDate] = useState(event ? (event.date||todayStr()) : todayStr());
-  const [cost, setCost] = useState(event && event.cost!=null ? String(event.cost) : "");
-  const [vendor, setVendor] = useState(event ? (event.vendor||"") : "");
-  const [notes, setNotes] = useState(event ? (event.notes||"") : "");
+function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
+  const seed = event || draft || null;   // draft = prefilled-but-unsaved (e.g. from a receipt)
+  const [id] = useState(() => (seed && seed.id) || uid());
+  const [title, setTitle] = useState(seed ? (seed.title||"") : "");
+  const [category, setCategory] = useState(seed ? (seed.category||"Repair") : "Repair");
+  const [date, setDate] = useState(seed ? (seed.date||todayStr()) : todayStr());
+  const [cost, setCost] = useState(seed && seed.cost!=null ? String(seed.cost) : "");
+  const [vendor, setVendor] = useState(seed ? (seed.vendor||"") : "");
+  const [notes, setNotes] = useState(seed ? (seed.notes||"") : "");
   const [photos, setPhotos] = useState(event && event.photos ? event.photos : []);
+  const [receipt] = useState(() => (seed && seed.receipt) || null);   // {docId, path, name}
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState("");
   const fileRef = useRef(null);
@@ -1534,6 +1553,7 @@ function EventSheet({ event, homeId, onSave, onDelete, onClose }){
       id, home_id: homeId, title: title.trim(), category, date,
       cost: cost.trim()==="" ? null : (Number(cost) || 0),
       vendor: vendor.trim(), notes: notes.trim(), photos,
+      receipt: receipt || (event ? event.receipt : null) || null,
       createdAt: event ? event.createdAt : nowISO(), updatedAt: nowISO(),
     });
   };
@@ -1582,6 +1602,14 @@ function EventSheet({ event, homeId, onSave, onDelete, onClose }){
           <textarea className="textarea" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Details, part numbers, warranty info..." />
         </div>
 
+        {receipt &&
+          <div className="field">
+            <label className="label">Receipt</label>
+            <button className="btn btn-ghost btn-block" onClick={()=>openStoredFile(receipt.path, setErr)}>
+              <Icon d={ICONS.external} size={16}/> {receipt.name || "Open receipt"}
+            </button>
+          </div>}
+
         <div className="field">
           <label className="label">Photos</label>
           <div className="photos-grid">
@@ -1607,7 +1635,7 @@ function EventSheet({ event, homeId, onSave, onDelete, onClose }){
   );
 }
 
-function LogScreen({ store, home, onAdd, onEdit, onDelete }){
+function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt }){
   const events = (store.data.events||[])
     .filter(e => e.home_id === home.id)
     .sort((a,b)=> String(b.date||"").localeCompare(String(a.date||"")) || String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
@@ -1618,13 +1646,17 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete }){
         <h3 className="title-sm">Nothing logged yet</h3>
         <p>Log a repair, maintenance job, improvement, or inspection for {home.name} — with photos and cost.</p>
         <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}><Icon d={ICONS.plus} size={16}/> Log an entry</button>
+        <button className="btn btn-ghost" style={{marginTop:10}} onClick={onAddReceipt}><Icon d={ICONS.doc} size={16}/> Add from a receipt</button>
       </div>
     );
   }
   const total = events.reduce((s,e)=> s + (Number(e.cost)||0), 0);
   return (
     <div>
-      <div className="log-summary">{events.length} {events.length===1?"entry":"entries"}{total>0 ? " · $"+fmtNum(total)+" total" : ""}</div>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+        <div className="log-summary">{events.length} {events.length===1?"entry":"entries"}{total>0 ? " · $"+fmtNum(total)+" total" : ""}</div>
+        <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAddReceipt}>Add from receipt</button>
+      </div>
       <div className="list">
         {events.map(e => (
           <SwipeRow key={e.id} onDelete={()=>onDelete(e)}>
@@ -1636,6 +1668,7 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete }){
                   {e.date && <span className="chip">{fmtDate(e.date)}</span>}
                   {(e.cost!=null && e.cost!=="") && <span className="chip">${fmtNum(e.cost)}</span>}
                   {e.vendor && <span className="chip">{e.vendor}</span>}
+                  {e.receipt && <span className="chip">receipt</span>}
                   {e.photos && e.photos.length>0 && <span className="chip">{e.photos.length} photo{e.photos.length>1?"s":""}</span>}
                 </div>
               </div>
@@ -2336,6 +2369,7 @@ function App(){
   const docFileRef = useRef(null);
   const docPhotoRef = useRef(null);
   const docDirRef = useRef(null);
+  const receiptFileRef = useRef(null);
   // webkitdirectory can't be set through JSX reliably, so stamp it on the hidden
   // folder input after mount. `directory` covers Firefox. This makes the picker
   // choose a FOLDER and return every file down the tree (desktop browsers only;
@@ -2595,6 +2629,47 @@ function App(){
     const targetId = importHomeRef.current || (fallback ? fallback.id : null);
     if(targetId) addDocuments(files, targetId);
   };
+
+  // ---- receipt -> log entry ----
+  const pickReceipt = () => { if(receiptFileRef.current) receiptFileRef.current.click(); };
+  // Store the receipt as a document, read it, then open a prefilled draft Log
+  // entry with the receipt attached. One flow: pick a file, confirm the entry.
+  const addReceiptDraft = async (file, homeId) => {
+    if(!file) return;
+    if(file.size > DOC_MAX_BYTES){ showToast("That file is too large (20 MB max)"); return; }
+    setDocBusy("Reading receipt…");
+    try{
+      const dataUrl = await fileToDataURL(file);
+      const docId = uid();
+      const path = "documents/" + docId + "/" + Date.now().toString(36) + "-" + safeName(file.name);
+      await uploadFile(path, dataUrl);
+      const docRec = { id: docId, home_id: homeId, name: stripExt(file.name), category: classifyDoc(file.name),
+        path, size: file.size, mime: file.type || (isPdfName(file.name) ? "application/pdf" : ""),
+        sourceName: file.name, note: "", createdAt: nowISO(), updatedAt: nowISO() };
+      store.saveCollection("documents", [docRec, ...(store.data.documents||[])]);
+      let fields = {};
+      try { const res = await parseReceipt(path); fields = (res && res.fields) || {}; }
+      catch(e){ log("ERROR","parseReceipt: "+e.message); showToast("Saved the receipt; couldn't auto-read it - fill it in."); }
+      setDocBusy("");
+      setEventSheet({ event:null, draft: {
+        id: uid(),
+        title: fields.title || stripExt(file.name),
+        category: fields.category || "Service",
+        date: fields.date || todayStr(),
+        cost: fields.amount!=null ? fields.amount : null,
+        vendor: fields.vendor || "",
+        notes: fields.notes || "",
+        receipt: { docId, path, name: docRec.name },
+      }});
+    }catch(e){ setDocBusy(""); showToast(e.message || "Couldn't read that receipt"); }
+  };
+  const onReceiptFile = (e) => {
+    const file = (e.target.files||[])[0];
+    e.target.value = "";
+    const homes = store.data.homes || [];
+    const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
+    if(file && ah) addReceiptDraft(file, ah.id);
+  };
   // Open the import sheet aimed at the currently active home.
   const openImport = () => {
     const homes = store.data.homes || [];
@@ -2801,6 +2876,7 @@ function App(){
               : tab==="docs"     ? <DocsScreen store={store} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} onResort={()=>resortDocs(activeHome)}
                                      onDelete={(d)=>{ if(confirm("Delete this document? The file is removed from storage.")) deleteDoc(d); }} />
               : tab==="log"      ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})}
+                                     onAddReceipt={pickReceipt}
                                      onDelete={(e)=>{ if(confirm("Delete this log entry?")) deleteEvent(e.id); }} />
               :                    <RemindersScreen store={store} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
@@ -2828,6 +2904,7 @@ function App(){
       <input ref={docFileRef} type="file" multiple style={{display:"none"}} onChange={onDocFiles} />
       <input ref={docPhotoRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={onDocFiles} />
       <input ref={docDirRef} type="file" multiple style={{display:"none"}} onChange={onDocFiles} />
+      <input ref={receiptFileRef} type="file" accept="application/pdf,image/*" style={{display:"none"}} onChange={onReceiptFile} />
       {docBusy && <div className="toast">{docBusy}</div>}
 
       {importOpen && activeHome &&
@@ -2857,7 +2934,7 @@ function App(){
         <HomeSheet home={sheet.home} onSave={saveHome} onDelete={deleteHome} onClose={()=>setSheet(null)} />}
 
       {eventSheet && activeHome &&
-        <EventSheet event={eventSheet.event} homeId={activeHome.id} onSave={saveEvent} onDelete={deleteEvent} onClose={()=>setEventSheet(null)} />}
+        <EventSheet event={eventSheet.event} draft={eventSheet.draft} homeId={activeHome.id} onSave={saveEvent} onDelete={deleteEvent} onClose={()=>setEventSheet(null)} />}
 
       {remSheet && activeHome &&
         <ReminderSheet reminder={remSheet.reminder} preset={remSheet.preset} homeId={activeHome.id}
