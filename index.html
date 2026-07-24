@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.18.0";
+const APP_VERSION = "0.19.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-24.9";
+const BUILD = "2026-07-24.10";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -769,6 +769,10 @@ function nextDueFromToday(r){ return addInterval(todayStr(), r.every, r.unit); }
 
 function remStatus(r){
   if(r.doneAt) return "done";
+  // No due date is its own state, NOT "today". An imported to-do whose source
+  // card carried no date would otherwise claim false urgency (and 35 of them
+  // at once buries the ones that are genuinely due).
+  if(!r.dueDate) return "undated";
   const n = daysUntil(r.dueDate);
   if(n < 0)  return "overdue";
   if(n === 0) return "today";
@@ -1790,7 +1794,9 @@ function ReminderSheet({ reminder, preset, homeId, onSave, onDelete, onClose }){
   const [id] = useState(() => reminder ? reminder.id : uid());
   const [title, setTitle] = useState(base ? (base.title||"") : "");
   const [category, setCategory] = useState(base && base.category ? base.category : "Maintenance");
-  const [dueDate, setDueDate] = useState(reminder ? (reminder.dueDate||todayStr()) : todayStr());
+  // An existing reminder keeps whatever it has - including NO date (imported
+  // to-dos), so merely opening one can't silently schedule it for today.
+  const [dueDate, setDueDate] = useState(reminder ? (reminder.dueDate||"") : todayStr());
   const [repeat, setRepeat] = useState(base ? !!base.repeat : false);
   const [every, setEvery] = useState(base && base.every ? String(base.every) : "3");
   const [unit, setUnit] = useState(base && base.unit ? base.unit : "months");
@@ -1799,7 +1805,9 @@ function ReminderSheet({ reminder, preset, homeId, onSave, onDelete, onClose }){
   const save = () => {
     if(!title.trim()) return;
     onSave({
-      id, home_id: homeId, title: title.trim(), category, dueDate,
+      id, home_id: homeId, title: title.trim(), category,
+      // A repeating reminder needs an anchor date; a one-off may stay undated.
+      dueDate: dueDate || (repeat ? todayStr() : null),
       repeat,
       every: repeat ? Math.max(1, Number(every)||1) : null,
       unit:  repeat ? unit : null,
@@ -1885,6 +1893,7 @@ function ReminderRow({ r, onEdit, onComplete, onDelete }){
   const n = daysUntil(r.dueDate);
   const due =
     st === "done"    ? "Completed" :
+    st === "undated" ? "No date set" :
     st === "today"   ? "Due today" :
     st === "overdue" ? (n === -1 ? "1 day overdue" : Math.abs(n) + " days overdue") :
     n === 1          ? "Due tomorrow" : "Due in " + n + " days";
@@ -1910,8 +1919,13 @@ function ReminderRow({ r, onEdit, onComplete, onDelete }){
   );
 }
 
-function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete }){
+function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete, onClearImportedDates }){
   const all = (store.data.reminders||[]).filter(r => r.home_id === home.id);
+  // Reminders imported before v0.19.0 were stamped with the import date because
+  // there was no "undated" state. Spot them (source trello + due date == the day
+  // they were created) and offer a one-tap fix rather than 35 manual edits.
+  const misdated = all.filter(r => r.source === "trello" && !r.doneAt && r.dueDate &&
+                                   r.createdAt && r.dueDate === String(r.createdAt).slice(0,10));
 
   if(!all.length){
     return (
@@ -1938,6 +1952,7 @@ function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete }){
     ["Today",        pick("today")],
     ["Next 30 days", pick("soon")],
     ["Later",        pick("later")],
+    ["No date set",  pick("undated")],
     ["Completed",    all.filter(r => r.doneAt).sort((a,b)=>String(b.doneAt||"").localeCompare(String(a.doneAt||"")))],
   ].filter(g => g[1].length);
 
@@ -1946,10 +1961,19 @@ function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete }){
 
   return (
     <div>
-      <div className="log-summary">
-        {overdueN > 0 ? overdueN + " overdue" : "Nothing overdue"}
-        {soonN > 0 ? " · " + soonN + " due soon" : ""}
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+        <div className="log-summary">
+          {overdueN > 0 ? overdueN + " overdue" : "Nothing overdue"}
+          {soonN > 0 ? " · " + soonN + " due soon" : ""}
+        </div>
+        {misdated.length > 0 &&
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}}
+            onClick={()=>onClearImportedDates(misdated)}>Clear {misdated.length} imported date{misdated.length===1?"":"s"}</button>}
       </div>
+      {misdated.length > 0 &&
+        <div className="hint" style={{marginBottom:6}}>
+          {misdated.length} imported reminder{misdated.length===1?"":"s"} got today's date because the source card had none. Clearing moves them to "No date set" so they stop looking due.
+        </div>}
       {groups.map(g => (
         <div key={g[0]}>
           <div className="set-group">{g[0]}</div>
@@ -1979,7 +2003,7 @@ async function openStoredFile(path, onErr){
 
 /* Add sheet opened by the center + in the bottom nav (portfolio nav standard).
    One place for every in-home create; no action is pre-highlighted. */
-function AddSheet({ onLog, onReminder, onDocs, onNote, onClose }){
+function AddSheet({ onLog, onReminder, onDocs, onNote, onTrello, onClose }){
   return (
     <>
       <div className="scrim" onClick={onClose}></div>
@@ -1994,7 +2018,9 @@ function AddSheet({ onLog, onReminder, onDocs, onNote, onClose }){
           <button className="btn btn-ghost btn-block" onClick={onReminder}><Icon d={ICONS.bell} size={17}/> Reminder</button>
           <button className="btn btn-ghost btn-block" onClick={onDocs}><Icon d={ICONS.doc} size={17}/> Documents</button>
           <button className="btn btn-ghost btn-block" onClick={onNote}><Icon d={ICONS.tool} size={17}/> System or note</button>
+          <button className="btn btn-ghost btn-block" onClick={onTrello}><Icon d={ICONS.upload} size={17}/> Import a Trello board</button>
         </div>
+        <div className="hint" style={{marginTop:8}}>A board's cards are sorted into the Log, Reminders, and Systems &amp; Notes.</div>
       </div>
     </>
   );
@@ -2578,7 +2604,7 @@ function SystemRow({ s, onEdit, onDelete }){
   );
 }
 
-function SystemsScreen({ store, home, onAdd, onEdit, onDelete }){
+function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello }){
   const [collapsed, setCollapsed] = useState({});
   const [query, setQuery] = useState("");
   const toggle = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
@@ -2590,9 +2616,12 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete }){
       <div className="empty">
         <div className="glyph">{"{}"}</div>
         <h3 className="title-sm">No systems or notes yet</h3>
-        <p>Keep the reference details for {home.name} here: appliances and equipment, model numbers, vendors, warranties, and general notes. Import your Trello board or add them one at a time.</p>
+        <p>Keep the reference details for {home.name} here: appliances and equipment, model numbers, vendors, warranties, and general notes.</p>
         <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
           <Icon d={ICONS.plus} size={16}/> Add a note
+        </button>
+        <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}>
+          <Icon d={ICONS.upload} size={16}/> Import a Trello board
         </button>
       </div>
     );
@@ -3183,7 +3212,7 @@ function App(){
       } else if(type === "reminder"){
         reminders.push({
           id: uid(), home_id: homeId, title: en.title, category: en.category || "Maintenance",
-          dueDate: en.dueDate || todayStr(), repeat: false, every: 1, unit: "months",
+          dueDate: en.dueDate || null, repeat: false, every: 1, unit: "months",
           notes: mkNotes(en), doneAt: null, createdAt: now, updatedAt: now, source: "trello",
         });
       } else {
@@ -3203,6 +3232,18 @@ function App(){
     if(reminders.length) parts.push(reminders.length + " to Reminders");
     if(systems.length)   parts.push(systems.length + " to Systems");
     showToast("Imported " + (parts.join(", ") || "nothing"));
+  };
+
+  // Drop the placeholder due date off imported reminders that never had one.
+  const clearImportedDates = (list) => {
+    if(!list.length) return;
+    if(!confirm("Clear the due date on " + list.length + " imported reminder" + (list.length===1?"":"s") +
+                "? They move to \"No date set\" - nothing is deleted, and you can set real dates any time.")) return;
+    const ids = new Set(list.map(r => r.id));
+    const now = nowISO();
+    store.saveCollection("reminders", (store.data.reminders||[])
+      .map(r => ids.has(r.id) ? {...r, dueDate:null, updatedAt:now} : r));
+    showToast(list.length + " moved to \"No date set\"");
   };
 
   // ---- systems & notes ----
@@ -3460,11 +3501,13 @@ function App(){
                                      onDelete={(e)=>{ if(confirm("Delete this log entry?")) deleteEvent(e.id); }} />
               : tab==="systems"  ? <SystemsScreen store={store} home={activeHome}
                                      onAdd={()=>setSysSheet({system:null})} onEdit={(s)=>setSysSheet({system:s})}
+                                     onImportTrello={pickTrello}
                                      onDelete={(s)=>{ if(confirm("Delete this note?")) deleteSystem(s); }} />
               :                    <RemindersScreen store={store} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
                                      onEdit={(r)=>setRemSheet({reminder:r, preset:null})}
                                      onComplete={completeReminder}
+                                     onClearImportedDates={clearImportedDates}
                                      onDelete={(r)=>{ if(confirm("Delete this reminder?")) deleteReminder(r.id); }} />
               )
             : <HomesScreen store={store} onAdd={()=>setSheet({home:null})} onEnter={enterHome}
@@ -3521,6 +3564,7 @@ function App(){
           onReminder={()=>{ setAddSheet(false); setRemSheet({reminder:null, preset:null}); }}
           onDocs={()=>{ setAddSheet(false); openImport(); }}
           onNote={()=>{ setAddSheet(false); setSysSheet({system:null}); }}
+          onTrello={()=>{ setAddSheet(false); pickTrello(); }}
           onClose={()=>setAddSheet(false)} />}
 
       {sheet &&
