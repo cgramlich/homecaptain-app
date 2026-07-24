@@ -237,12 +237,15 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
   background:var(--bg-3);border:1px solid var(--line-2);color:var(--ink-2);transition:.15s;}
 .icon-btn:active{border-color:var(--amber-line);background:var(--bg-4);}
 .icon-btn svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8;}
-.fab{position:fixed;right:calc(50% - 340px + 18px);bottom:calc(var(--nav-h) + 18px + env(safe-area-inset-bottom));z-index:55;
-  width:56px;height:56px;border-radius:50%;background:var(--amber);color:#241a0c;display:flex;align-items:center;justify-content:center;
-  box-shadow:0 10px 26px -6px rgba(215,169,75,.6);transition:.18s var(--ease);}
-@media (max-width:716px){.fab{right:18px;}}
-.fab:active{transform:scale(.92);}
-.fab svg{width:26px;height:26px;stroke:#241a0c;stroke-width:2.4;fill:none;}
+/* Center + in the bottom nav (portfolio nav standard 2026-07-24): a raised
+   amber button between the tab pairs that opens the Add sheet. Replaces the
+   old bottom-right contextual FAB. */
+.nav-add{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;padding:0;}
+.nav-add span{width:46px;height:46px;border-radius:50%;background:var(--amber);margin-top:-14px;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 8px 20px -4px rgba(215,169,75,.55);transition:.15s var(--ease);}
+.nav-add:active span{transform:scale(.92);}
+.nav-add svg{width:24px;height:24px;stroke:#241a0c;stroke-width:2.4;fill:none;}
 
 /* ---------- sheet / modal ---------- */
 .scrim{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);animation:fade .2s;}
@@ -304,9 +307,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.12.0";
+const APP_VERSION = "0.13.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-24.2";
+const BUILD = "2026-07-24.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1872,6 +1875,28 @@ async function openStoredFile(path, onErr){
   }
 }
 
+/* Add sheet opened by the center + in the bottom nav (portfolio nav standard).
+   One place for every in-home create; no action is pre-highlighted. */
+function AddSheet({ onLog, onReminder, onDocs, onClose }){
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Add</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <div style={{display:"flex", flexDirection:"column", gap:10}}>
+          <button className="btn btn-ghost btn-block" onClick={onLog}><Icon d={ICONS.log} size={17}/> Log entry</button>
+          <button className="btn btn-ghost btn-block" onClick={onReminder}><Icon d={ICONS.bell} size={17}/> Reminder</button>
+          <button className="btn btn-ghost btn-block" onClick={onDocs}><Icon d={ICONS.doc} size={17}/> Documents</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function ImportSheet({ homes, homeId, onHome, showDropbox, onFiles, onFolder, onPhotos, onDropbox, onLink, onClose }){
   const [mode, setMode] = useState("menu");   // menu | link
   const [url, setUrl] = useState("");
@@ -2360,6 +2385,7 @@ function App(){
   const [view, setView] = useState("houses");   // "houses" (top level) | "home" (inside one)
   const [tab, setTab] = useState("overview");    // section within a home
   const [sheet, setSheet] = useState(null);   // null | {home}
+  const [addSheet, setAddSheet] = useState(false);      // center-+ Add sheet (in-home)
   const [eventSheet, setEventSheet] = useState(null);   // null | {event}
   const [remSheet, setRemSheet] = useState(null);       // null | {reminder, preset}
   const [docSheet, setDocSheet] = useState(null);       // null | {doc}
@@ -2854,7 +2880,10 @@ function App(){
           ) : (
             <>
               <div><div className="eyebrow">HomeCaptain</div><h1 className="title">Your homes</h1></div>
-              <button className="icon-btn" onClick={()=>setInSettings(true)} aria-label="Settings"><Icon d={ICONS.gear} size={21}/></button>
+              <div style={{display:"flex", gap:8}}>
+                <button className="icon-btn" onClick={()=>setSheet({home:null})} aria-label="Add home"><Icon d={ICONS.plus} size={21}/></button>
+                <button className="icon-btn" onClick={()=>setInSettings(true)} aria-label="Settings"><Icon d={ICONS.gear} size={21}/></button>
+              </div>
             </>
           )}
         </div>
@@ -2888,15 +2917,6 @@ function App(){
                 onDelete={(h)=>{ if(confirm("Delete this home? Its logged items stay but lose the link to it.")) deleteHome(h.id); }} />}
       </div>
 
-      {!inSettings && !inHome &&
-        <button className="fab" onClick={()=>setSheet({home:null})} aria-label="Add home"><Icon d={ICONS.plus} size={26}/></button>}
-      {!inSettings && inHome && tab==="log" &&
-        <button className="fab" onClick={()=>setEventSheet({event:null})} aria-label="Log an entry"><Icon d={ICONS.plus} size={26}/></button>}
-      {!inSettings && inHome && tab==="remind" && (store.data.reminders||[]).some(r=>r.home_id===activeHome.id) &&
-        <button className="fab" onClick={()=>setRemSheet({reminder:null, preset:null})} aria-label="Add reminder"><Icon d={ICONS.plus} size={26}/></button>}
-      {!inSettings && inHome && tab==="docs" && (store.data.documents||[]).some(d=>d.home_id===activeHome.id) &&
-        <button className="fab" onClick={openImport} aria-label="Add documents"><Icon d={ICONS.plus} size={26}/></button>}
-
       {/* Two inputs on purpose. iOS only shows the Photo Library / Take Photo /
           Choose File action sheet when the input ACCEPTS images; with no accept
           it opens the Files browser directly, which is where Dropbox, iCloud and
@@ -2922,13 +2942,29 @@ function App(){
 
       {!inSettings && inHome &&
         <nav className="nav">
-          {HOME_TABS.map(t => (
+          {HOME_TABS.slice(0,2).map(t => (
+            <button key={t.key} className={"nav-btn "+(tab===t.key?"on":"")} onClick={()=>setTab(t.key)}>
+              <Icon d={t.icon} size={22}/>
+              {t.label}
+            </button>
+          ))}
+          <button className="nav-add" onClick={()=>setAddSheet(true)} aria-label="Add">
+            <span><Icon d={ICONS.plus} size={24}/></span>
+          </button>
+          {HOME_TABS.slice(2).map(t => (
             <button key={t.key} className={"nav-btn "+(tab===t.key?"on":"")} onClick={()=>setTab(t.key)}>
               <Icon d={t.icon} size={22}/>
               {t.label}
             </button>
           ))}
         </nav>}
+
+      {addSheet && activeHome &&
+        <AddSheet
+          onLog={()=>{ setAddSheet(false); setEventSheet({event:null}); }}
+          onReminder={()=>{ setAddSheet(false); setRemSheet({reminder:null, preset:null}); }}
+          onDocs={()=>{ setAddSheet(false); openImport(); }}
+          onClose={()=>setAddSheet(false)} />}
 
       {sheet &&
         <HomeSheet home={sheet.home} onSave={saveHome} onDelete={deleteHome} onClose={()=>setSheet(null)} />}
