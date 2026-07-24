@@ -298,9 +298,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.9.9";
+const APP_VERSION = "0.10.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-23.11";
+const BUILD = "2026-07-23.12";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -688,11 +688,16 @@ const DOC_CATEGORIES = [
   { k:"Purchase & Closing",     c:"amber"  },   // incl. disclosures (all part of buying)
   { k:"Title & Survey",         c:"blue"   },
   { k:"Mortgage & Taxes",       c:"green"  },
+  { k:"Financial & Statements", c:"green"  },
   { k:"Insurance",              c:"blue"   },
+  { k:"Utilities",              c:"violet" },
   { k:"Maintenance & Repairs",  c:"red"    },
   { k:"Improvements & Permits", c:"violet" },
   { k:"Warranties & Manuals",   c:"green"  },
   { k:"HOA",                    c:"amber"  },
+  { k:"Receipts & Purchases",   c:"amber"  },
+  { k:"Correspondence",         c:"blue"   },
+  { k:"Photos",                 c:"violet" },
   { k:"Other",                  c:""       },
 ];
 function docCatClass(cat){ const f = DOC_CATEGORIES.find(x=>x.k===cat); return f && f.c ? f.c : ""; }
@@ -702,24 +707,27 @@ function docCatClass(cat){ const f = DOC_CATEGORIES.find(x=>x.k===cat); return f
 const CATEGORY_REMAP = { "Disclosures":"Purchase & Closing", "Taxes & Financial":"Mortgage & Taxes" };
 function migrateDocCat(cat){ return CATEGORY_REMAP[cat] || cat || "Other"; }
 
-// Guess a category from the filename. Order matters (first match wins). The
-// specific domains that share generic words with purchase paperwork are checked
-// FIRST: HOA before Purchase (a "Bylaws Amendment" is HOA, not the "amendment"
-// in a purchase). Purchase keywords were narrowed so they stop over-catching:
-// "septic" removed (a septic INSPECTION/MAINTENANCE contract is Maintenance; the
-// purchase disclosure is still caught by "information about"), bare "contract"
-// -> specific purchase contracts (so a "maintenance contract" isn't grabbed),
-// "financ" -> "financing" (so company "Financials" don't match). Users re-tag a
-// miss in one tap, or use Re-sort.
+// Guess a category from the filename. Order matters (first match wins), tuned
+// against a real 162-doc set. Notes: HOA first + recognizes RCPOA/POA/DCCR/ACC.
+// A file literally named "...Photo" is a Photo up front, but a scanned document
+// (image extension only) falls to Photos LAST so its content keywords win.
+// "Guide/How-To" -> Warranties before Maintenance so a sprinkler GUIDE isn't a
+// repair. Receipts caught by "receipt" (not "invoice", which is contextual).
 const DOC_RULES = [
-  [/\bhoa\b|homeowners? assoc|owners? association|property owners|\bpoa\b|\bassociation\b|cc&r|\bccr\b|covenant|bylaw/i, "HOA"],
-  [/survey|title|t.?47|plat|legal descr|parcel|easement/i, "Title & Survey"],
-  [/closing|amendment|addendum|financing|earnest|option fee|one.?to.?four|purchase agreement|purchase contract|residential contract|sales contract|settlement|\bdeed\b|promissory|escrow instruction|disclos|lead.?based|brokerage|non.?realty|mud notice|information about/i, "Purchase & Closing"],
-  [/insur|\bpolicy\b|flood cert|home.?warranty|\bclaim/i, "Insurance"],
-  [/permit|remodel|renovat|\baddition\b|contractor|estimate|\bbid\b|blueprint|improvement/i, "Improvements & Permits"],
-  [/repair|service|inspection|\bhvac\b|plumb|\broof|pest|maintenance|furnace|water heater|tune.?up|gutter|landscap|\blawn\b|septic|aerobic|\bossf\b|\bpump/i, "Maintenance & Repairs"],
-  [/mortgage|loan statement|escrow|1098|property tax|\btax\b|amortiz|payoff|refinance|deed of trust|appraisal/i, "Mortgage & Taxes"],
-  [/warrant|manual|owner.?s guide|spec sheet/i, "Warranties & Manuals"],
+  [/rcpoa|\bpoa\b|\bhoa\b|homeowners? assoc|owners? association|property owners|\bdccr|cc&r|\bccr\b|\bacc\b|architectural|articles of incorp|covenant|bylaw/i, "HOA"],
+  [/\bphoto\b|\bphotos\b|\bpicture\b/i, "Photos"],
+  [/survey|\btitle\b|t.?47|\bplat\b|legal descr|parcel|easement/i, "Title & Survey"],
+  [/closing|amendment|addendum|financing|earnest|option fee|one.?to.?four|purchase agreement|purchase contract|residential contract|residential agreement|sales contract|settlement|\bdeed\b|promissory|escrow instruction|disclos|lead.?based|brokerage|non.?realty|information about/i, "Purchase & Closing"],
+  [/insur|\bpolicy\b|flood cert|home.?warranty|american home shield|\bahs\b|\bclaim/i, "Insurance"],
+  [/\bpec\b|pedernales|cooperative|\bco-?op\b|\belectric|internet|\butilit|\btrash\b|\bsewer\b|\bkwh\b|generator|breaker|water bill|gas bill/i, "Utilities"],
+  [/warrant|\bmanual\b|owner.?s guide|spec sheet|how.?to|\bguide\b|instructions/i, "Warranties & Manuals"],
+  [/permit|remodel|renovat|\baddition\b|contractor|\bestimate\b|\bbid\b|blueprint|improvement|repaint|\bproject\b/i, "Improvements & Permits"],
+  [/repair|\bservice\b|inspection|\bhvac\b|plumb|\broof|pest|maintenance|furnace|water heater|tune.?up|gutter|landscap|\blawn\b|septic|aerobic|\bossf\b|\bpump|backflow|filter|sprinkler|\bpools?\b|\bspa\b|cleaning/i, "Maintenance & Repairs"],
+  [/mortgage|loan statement|escrow|1098|property tax|\btax\b|amortiz|payoff|refinance|deed of trust|appraisal|pre.?approval|pre.?qual/i, "Mortgage & Taxes"],
+  [/\bp&l\b|profit and loss|balance sheet|statements?|\bcma\b|financials|\bledger\b|net worth|\bk-1\b|1099/i, "Financial & Statements"],
+  [/gmail|\bemail\b|\bletter\b|correspond|\bnotice\b|\bappeal\b|\bmemo\b/i, "Correspondence"],
+  [/receipt|order confirmation|\binvoice\b|purchase order/i, "Receipts & Purchases"],
+  [/\.(jpe?g|png|heic|heif|gif|webp|bmp|tiff?)$/i, "Photos"],
 ];
 function classifyDoc(filename){
   const n = String(filename||"");
