@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.17.0";
+const APP_VERSION = "0.17.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-24.7";
+const BUILD = "2026-07-24.8";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2716,10 +2716,14 @@ function TrelloReviewSheet({ review, onImport, onClose }){
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <div className="hint" style={{marginBottom:10}}>
-          {entries.length} {entries.length===1?"card":"cards"} sorted from {review.boardName||"the board"}. Uncheck anything you don't want.
+          {entries.length} of {review.cardCount || entries.length} {(review.cardCount||entries.length)===1?"card":"cards"} sorted from {review.boardName||"the board"}. Uncheck anything you don't want.
           {att.total>0 ? " " + att.total + " attachment" + (att.total===1?"":"s") + " on the board: " +
             att.inDocs + " already in your Documents, " + att.missing.length + " to download from Trello." : ""}
         </div>
+        {review.cardCount > entries.length &&
+          <div className="hint" style={{marginBottom:10, color:"var(--amber)"}}>
+            {review.cardCount - entries.length} card{review.cardCount-entries.length===1?"":"s"} couldn't be read. Import these, then run it again to catch the rest.
+          </div>}
         <div style={{display:"flex", gap:12, marginBottom:8}}>
           <button className="assist-toggle" onClick={()=>setSel(entries.map((_,i)=>i))}>Select all</button>
           <button className="assist-toggle" onClick={()=>setSel([])}>Clear</button>
@@ -3136,7 +3140,9 @@ function App(){
       const allAttach = Array.from(new Set(cards.flatMap(c => c.attachments || [])));
       const missing = allAttach.filter(n => !haveKeys.has(docNameKey(n)));
       const attach = { total: allAttach.length, inDocs: allAttach.length - missing.length, missing };
-      setTrelloReview({ entries, homeId: ah.id, boardName: json.name || "Trello board", attach });
+      log("TRELLO", cards.length + " cards -> " + entries.length + " entries " + JSON.stringify(res.counts || {}));
+      setTrelloReview({ entries, homeId: ah.id, boardName: json.name || "Trello board", attach,
+                        cardCount: (res && res.cardCount) || cards.length });
     }catch(err){ setDocBusy(""); log("ERROR","trello: "+err.message); showToast(err.message || "Couldn't read that board."); }
   };
   const importTrelloEntries = (chosen, homeId) => {
