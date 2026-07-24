@@ -304,9 +304,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.11.0";
+const APP_VERSION = "0.11.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-23.13";
+const BUILD = "2026-07-24.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1052,7 +1052,10 @@ const ICONS = {
 function SwipeRow({ onDelete, children }){
   const [dx,setDx] = useState(0);
   const st = useRef(null); const moved = useRef(false);
-  function down(e){ st.current = { x:e.clientX, y:e.clientY, base:dx }; moved.current = false; try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){} }
+  // Swipe is a TOUCH gesture. On a mouse we must not engage: setPointerCapture
+  // would retarget the click off the inner row so onClick never fires (a home
+  // card looked "stuck" and wouldn't open on the laptop). Mouse = clean click.
+  function down(e){ if(e.pointerType === "mouse") return; st.current = { x:e.clientX, y:e.clientY, base:dx }; moved.current = false; try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){} }
   function move(e){
     if(!st.current) return;
     const ddx = e.clientX - st.current.x, ddy = e.clientY - st.current.y;
