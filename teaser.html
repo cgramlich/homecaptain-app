@@ -2,8 +2,23 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="HomeCaptain - the complete information layer for your home.">
-<title>HomeCaptain — Vision</title>
+<meta name="description" content="HomeCaptain: the one place that holds everything your home generates, and hands it back the moment you need it. Live on the web today.">
+<title>HomeCaptain</title>
+
+<!-- Link preview card: makes a shared link render with the icon and a summary
+     in iMessage, WhatsApp, Slack and email instead of as a naked URL. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="HomeCaptain">
+<meta property="og:title" content="HomeCaptain — your home's memory">
+<meta property="og:description" content="Every repair, document, warranty and system for your house in one place, with an assistant that reads it back to you. Live on the web today.">
+<meta property="og:image" content="https://cgramlich.github.io/homecaptain-app/icon-512.png">
+<meta property="og:image:alt" content="HomeCaptain app icon">
+<meta property="og:url" content="https://cgramlich.github.io/homecaptain-app/teaser.html">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="HomeCaptain — your home's memory">
+<meta name="twitter:description" content="Every repair, document, warranty and system for your house in one place, with an assistant that reads it back to you.">
+<meta name="twitter:image" content="https://cgramlich.github.io/homecaptain-app/icon-512.png">
+<meta name="theme-color" content="#16201c">
 <style>
   :root{
     /* light — sage-biased paper + brass */
@@ -116,6 +131,20 @@
   .pillar .tag{font-family:var(--font-mono);font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--brass);}
   .pillar h3{font-size:1.16rem;}
   .pillar p{margin:0;color:var(--ink-2);font-size:.96rem;line-height:1.55;}
+  /* built-vs-planned marker, so a shared page never overstates what exists */
+  .pillar .top{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .st{font-family:var(--font-mono);font-size:.6rem;letter-spacing:.14em;text-transform:uppercase;
+    padding:3px 8px;border-radius:99px;white-space:nowrap;border:1px solid transparent;}
+  .st.live{color:var(--evergreen);background:#1d4c3916;border-color:#1d4c3940;}
+  .st.soon{color:var(--muted);background:var(--line);border-color:var(--line-strong);}
+  /* the evergreen ink goes muddy on a dark ground, so lift it there */
+  @media (prefers-color-scheme:dark){
+    .st.live{color:#7fc9a3;background:#2c6b5024;border-color:#2c6b5066;}
+  }
+  :root[data-theme="dark"] .st.live{color:#7fc9a3;background:#2c6b5024;border-color:#2c6b5066;}
+  :root[data-theme="light"] .st.live{color:#1d4c39;background:#1d4c3916;border-color:#1d4c3940;}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin-bottom:18px;align-items:center;
+    font-family:var(--font-mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);}
 
   /* ---- the loop (a real sequence -> numbered) ---- */
   .loop{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden;}
@@ -187,9 +216,10 @@
   <header class="hero fade">
     <div class="kicker">HomeCaptain &nbsp;·&nbsp; a Forever Apps project</div>
     <h1>The complete information&nbsp;layer for your <em>home.</em></h1>
-    <p class="lede">Your house generates records for decades — repairs, warranties, bills, blueprints, the plumber's number. All of it scatters across drawers, inboxes, and memory. HomeCaptain is the one place that holds it, understands it, and hands it back the moment you need it.</p>
+    <p class="lede">Your house generates records for decades: repairs, warranties, bills, blueprints, the plumber's number. All of it scatters across drawers, inboxes, and memory. HomeCaptain is the one place that holds it, understands it, and hands it back the moment you need it.</p>
     <div class="herometa">
       <span>Live on the web today</span>
+      <span>162 documents in the first home</span>
       <span>A Forever Apps project</span>
     </div>
   </header>
@@ -197,26 +227,33 @@
   <section class="prose fade" style="--i:.06s">
     <div class="sec-head"><span class="num">01</span><h2>The problem nobody has solved</h2></div>
     <p>A home is the largest asset most people ever own, and the worst-documented. When the water heater fails, you can't remember who installed it or whether it's under warranty. When you file an insurance claim, you're reconstructing a lifetime of contents from nothing. When you sell, everything you learned about the house walks out the door with you.</p>
-    <p>There is no source of truth for a home. <strong>HomeCaptain is that source of truth</strong> — and the assistant that reads it back to you.</p>
+    <p>There is no source of truth for a home. <strong>HomeCaptain is that source of truth</strong>, and the assistant that reads it back to you.</p>
   </section>
 
   <section class="fade" style="--i:.06s">
     <div class="sec-head"><span class="num">02</span><h2>What it holds</h2></div>
+    <div class="legend">
+      <span class="st live">Live</span><span>working today</span>
+      <span class="st soon">Planned</span><span>on the roadmap</span>
+    </div>
     <div class="pillars">
-      <div class="pillar"><div class="tag">Memory</div><h3>The Logbook</h3><p>Every repair, upgrade, and service visit — cost, vendor, photos, notes. Searchable history and spend by category. It only gets more valuable the longer you own the home.</p></div>
-      <div class="pillar"><div class="tag">Vault</div><h3>Documents &amp; Blueprints</h3><p>Bills, warranties, policies, permits, closing docs — and the floorplans and survey. Scanned, tied to the home, and instantly findable.</p></div>
-      <div class="pillar"><div class="tag">Answers</div><h3>Ask Your Manuals</h3><p>Snap a model number and the manual is captured for good — then just ask it. "How do I reset the dishwasher?" is answered from the actual document, not a drawer you'll dig through and lose again.</p></div>
-      <div class="pillar"><div class="tag">Protection</div><h3>Insurance Inventory</h3><p>Room-by-room contents with photos and values, one tap from a claim-ready PDF. Photograph a room and the AI drafts the list for you. Most people have nothing when disaster strikes.</p></div>
-      <div class="pillar"><div class="tag">Foresight</div><h3>Maintenance Engine</h3><p>Recurring and seasonal reminders — filters, gutters, HVAC, winterizing — tailored to the home's age, systems, and climate. And because it knows your models, "filter's due" comes with the exact part, one tap from reordered.</p></div>
-      <div class="pillar"><div class="tag">Trust</div><h3>Find a Pro &amp; Quotes</h3><p>Search vetted contractors near the home, keep the ones you've hired with your own rating, and let the AI read a repair quote and tell you what to ask before you sign.</p></div>
-      <div class="pillar"><div class="tag">Intelligence</div><h3>AI Concierge</h3><p>Scan a bill into a record. Summarize a home's history and spend. "What's due?" "Where's the water shutoff?" The connective tissue across everything above.</p></div>
-      <div class="pillar"><div class="tag">Design</div><h3>Reimagine the Space</h3><p>HomeCaptain isn't only about what breaks. Explore a redesign — furniture, paint, and style to try before you buy — on a to-scale floorplan that tells you whether the sofa actually fits before you order it.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Memory</div><span class="st live">Live</span></div><h3>The Logbook</h3><p>Every repair, upgrade, and service visit with cost, vendor, photos, and notes. Photograph a receipt and the entry drafts itself. Searchable history and spend by category, more valuable the longer you own the home.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Vault</div><span class="st live">Live</span></div><h3>Document Vault</h3><p>Bills, warranties, policies, permits, surveys, the whole closing packet. Drop in a folder and everything files itself into the right category, deduplicated, searchable, and tied to the home.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Answers</div><span class="st live">Live</span></div><h3>Ask Your Home</h3><p>"What square footage does the appraisal list?" It finds the appraisal, opens it, and answers from what the document actually says. Not a search box over filenames.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Inventory</div><span class="st live">Live</span></div><h3>Systems &amp; Notes</h3><p>The roof, the generator, both water heaters, the network closet. Model numbers, install dates, and which vendor services what, so the knowledge lives in the house instead of in your head.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Foresight</div><span class="st live">Live</span></div><h3>Maintenance Engine</h3><p>Recurring and seasonal reminders for filters, gutters, HVAC, and winterizing, rescheduled from the day you actually finish rather than the day you missed.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Continuity</div><span class="st soon">Planned</span></div><h3>Shared Access</h3><p>Give a spouse, a property manager, or the next owner their own view of one home, revocable the moment you want it back. Everything you learned about the house stops walking out the door with you.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Protection</div><span class="st soon">Planned</span></div><h3>Insurance Inventory</h3><p>Room-by-room contents with photos and values, one tap from a claim-ready PDF. Photograph a room and the AI drafts the list. Most people have nothing when disaster strikes.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Manuals</div><span class="st soon">Planned</span></div><h3>Ask Your Manuals</h3><p>Snap a model number and the manual is captured for good, then just ask it. "How do I reset the dishwasher?" answered from the actual document, not a drawer you'll dig through and lose again.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Trust</div><span class="st soon">Planned</span></div><h3>Find a Pro &amp; Quotes</h3><p>Search vetted contractors near the home, keep the ones you've hired with your own rating, and let the AI read a repair quote and tell you what to ask before you sign.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Supply</div><span class="st soon">Planned</span></div><h3>Smart Reorder</h3><p>Because it knows your exact models, "the filter is due" arrives with the right part number already matched, one tap from reordered. The house restocks itself.</p></div>
+      <div class="pillar"><div class="top"><div class="tag">Design</div><span class="st soon">Planned</span></div><h3>Blueprints &amp; Redesign</h3><p>HomeCaptain isn't only about what breaks. Keep the floorplans and survey, then explore a redesign on a to-scale plan that tells you whether the sofa actually fits before you order it.</p></div>
     </div>
   </section>
 
   <section class="fade" style="--i:.06s">
-    <div class="sec-head"><span class="num">03</span><h2>The loop that hooks people</h2></div>
-    <p class="prose" style="margin-bottom:22px;color:var(--ink-2);max-width:64ch;">The everyday nightmare — <em>something broke, who do I call, and am I getting ripped off?</em> — solved end to end, in one place.</p>
+    <div class="sec-head"><span class="num">03</span><h2>The loop that hooks people</h2><span class="st soon" style="align-self:center">Where it's going</span></div>
+    <p class="prose" style="margin-bottom:22px;color:var(--ink-2);max-width:64ch;">The everyday nightmare, <em>something broke, who do I call, and am I getting ripped off?</em>, solved end to end in one place. Steps 5 and 6 already work: the record and the vendor are exactly what the app keeps today. The front half is what's being built onto it.</p>
     <div class="loop">
       <div class="step"><div class="n">1</div><div class="b">Find pros nearby <span>— by category, with real ratings</span></div></div>
       <div class="step"><div class="n">2</div><div class="b">Collect their quotes <span>— snap or paste each one</span></div></div>
@@ -225,21 +262,22 @@
       <div class="step"><div class="n">5</div><div class="b">The job logs itself <span>— into the home's permanent record</span></div></div>
       <div class="step"><div class="n">6</div><div class="b">The vendor is saved, with your rating</div></div>
     </div>
-    <p class="loop-foot">next time it's <b>one tap</b> — the loop closes</p>
+    <p class="loop-foot">next time it's <b>one tap</b>. the loop closes</p>
   </section>
 
   <section class="fade" style="--i:.06s">
     <div class="real">
       <div class="kicker" style="color:var(--brass-bright)">Not a mockup</div>
-      <h2 style="margin-top:.5rem">A working foundation is already live.</h2>
-      <p class="lede">The unglamorous plumbing that usually eats the first three months — accounts, auth, sync, storage, an AI pipeline — is built and running on the open web today. The vision above sits on top of a stack that already works.</p>
+      <h2 style="margin-top:.5rem">It's running a real house right now.</h2>
+      <p class="lede">This isn't a prototype waiting on a backend. A real home is loaded into it: the full closing packet, the inspection reports, the service history, every system in the house. The numbers below are that house, not a projection.</p>
       <div class="stats">
-        <div class="stat"><div class="k">Status</div><div class="v">Live end&#8209;to&#8209;end</div></div>
-        <div class="stat"><div class="k">Stack</div><div class="v">PWA · API · Supabase</div></div>
-        <div class="stat"><div class="k">Homes</div><div class="v">Multi&#8209;property</div></div>
-        <div class="stat"><div class="k">Storage</div><div class="v">Photos &amp; PDFs</div></div>
-        <div class="stat"><div class="k">AI</div><div class="v">Relay wired</div></div>
+        <div class="stat"><div class="k">Documents filed</div><div class="v">162</div></div>
+        <div class="stat"><div class="k">Auto&#8209;sorted into</div><div class="v">15 categories</div></div>
+        <div class="stat"><div class="k">Systems logged</div><div class="v">50</div></div>
+        <div class="stat"><div class="k">Imported in one pass</div><div class="v">89 records</div></div>
+        <div class="stat"><div class="k">AI</div><div class="v">Reads the actual PDF</div></div>
       </div>
+      <p class="lede" style="margin-top:22px;font-size:1rem;">Point it at a folder and it files the lot. Ask it what the appraisal says and it opens the appraisal. Hand it a receipt and the log entry writes itself.</p>
     </div>
   </section>
 
@@ -252,7 +290,7 @@
   <div class="close">
     <div class="kicker">Where it's headed</div>
     <h2>The foundation is poured. The interesting work is ahead.</h2>
-    <p class="lede">HomeCaptain starts as the place your home's records finally live — and grows into the assistant that reads them back, protects what matters, and helps you make the place better. One home at a time.</p>
+    <p class="lede">The place your home's records finally live is built and working. From here it grows into the assistant that reads them back, protects what matters, and helps you make the place better. One home at a time.</p>
     <div class="sign">
       <span>Built by <b>Chris &amp; Kristin Gramlich</b></span>
       <span>MilSpo Life LLC</span>
