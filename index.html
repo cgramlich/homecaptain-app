@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.26.0";
+const APP_VERSION = "0.26.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.6";
+const BUILD = "2026-07-31.7";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -399,6 +399,17 @@ const API_BASE = "https://web-production-cd84d.up.railway.app";
 // Leave blank to hide the Dropbox option. Register a "Chooser/Saver" app at
 // https://www.dropbox.com/developers/apps and whitelist the app's domain.
 const DROPBOX_APP_KEY = "";
+// Can this device actually hand over a whole folder? Chrome/Edge on the desktop
+// via the File System Access API, other desktop browsers via <input webkitdirectory>.
+// iOS reports the property but shows a file picker anyway, so offering the button
+// there just gives you two buttons that do the same thing.
+const CAN_PICK_FOLDER = (() => {
+  if(typeof window === "undefined") return false;
+  if(typeof window.showDirectoryPicker === "function") return true;
+  if(/iPad|iPhone|iPod/.test(navigator.userAgent)) return false;
+  if(navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)) return false;  // iPadOS desktop UA
+  return "webkitdirectory" in document.createElement("input");
+})();
 
 // Supabase client - AUTH ONLY (login, session, token refresh). Data + AI never
 // touch it; they go through our backend with the user's access token.
@@ -2232,13 +2243,16 @@ function ImportSheet({ homes, homeId, onHome, showDropbox, onFiles, onFolder, on
         {mode==="menu" ? (
           <div style={{display:"flex", flexDirection:"column", gap:10}}>
             <button className="btn btn-ghost btn-block" onClick={onFiles}><Icon d={ICONS.file} size={17}/> Choose files</button>
-            <button className="btn btn-ghost btn-block" onClick={onFolder}><Icon d={ICONS.home} size={17}/> Choose a folder</button>
+            {CAN_PICK_FOLDER &&
+              <button className="btn btn-ghost btn-block" onClick={onFolder}><Icon d={ICONS.home} size={17}/> Choose a folder</button>}
             <button className="btn btn-ghost btn-block" onClick={onPhotos}><Icon d={ICONS.camera} size={17}/> Photos</button>
             {showDropbox &&
               <button className="btn btn-ghost btn-block" onClick={onDropbox}><Icon d={ICONS.file} size={17}/> Dropbox</button>}
             <button className="btn btn-ghost btn-block" onClick={()=>setMode("link")}><Icon d={ICONS.external} size={17}/> From a link</button>
             <div className="hint" style={{marginTop:4}}>
-              <b>Choose a folder</b> grabs everything inside it, including subfolders (on a computer; phones can't pick a folder). On a phone, <b>Choose files</b> reaches iCloud, Dropbox, and Box.
+              {CAN_PICK_FOLDER
+                ? <><b>Choose a folder</b> grabs everything inside it, subfolders included, and the folder it came from decides its category. </>
+                : <><b>Choose files</b> reaches iCloud, Dropbox and Box through the Files browser. Phones can't hand over a whole folder, so pick a folder on a computer when you want everything at once. </>}
               Files copy into HomeCaptain, and re-choosing the same folder only pulls in what's new or changed.
             </div>
           </div>
