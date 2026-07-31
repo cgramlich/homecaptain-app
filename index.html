@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.21.1";
+const APP_VERSION = "0.22.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-28.1";
+const BUILD = "2026-07-24.14";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -348,6 +348,24 @@ function fmtDate(iso){
   const d = new Date(iso + (iso.length<=10 ? "T00:00:00" : ""));
   if(isNaN(d)) return "";
   return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
+}
+// How old a piece of equipment is, from a nameplate date. Accepts "YYYY",
+// "YYYY-MM" or "YYYY-MM-DD" because rating plates print whichever they like.
+// Returns { years, months, label } or null. Age drives the repair-or-replace
+// conversation, so it's shown wherever the equipment is.
+function equipmentAge(dateStr){
+  const m = String(dateStr||"").match(/^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$/);
+  if(!m) return null;
+  const y = +m[1], mo = m[2] ? Math.min(12, Math.max(1, +m[2])) : 1;
+  if(y < 1900 || y > 2200) return null;
+  const then = new Date(y, mo - 1, 1), now = new Date();
+  let months = (now.getFullYear() - then.getFullYear()) * 12 + (now.getMonth() - then.getMonth());
+  if(months < 0) return null;                       // plate date in the future: don't guess
+  const years = Math.floor(months / 12), rem = months % 12;
+  const label = years === 0 ? (rem === 1 ? "1 mo old" : rem + " mo old")
+    : (rem === 0 ? (years === 1 ? "1 yr old" : years + " yr old")
+                 : years + " yr " + rem + " mo old");
+  return { years, months, label };
 }
 
 /* ============================================================
@@ -534,6 +552,23 @@ async function parseTrello(cards){
     throw new Error(detail || ("Couldn't read that board ("+r.status+")."));
   }
   return await r.json();   // { entries: [...] }
+}
+// Read an equipment rating plate (already uploaded) into structured fields.
+async function readNameplate(path){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/equipment/nameplate", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ path })
+  });
+  if(!r.ok){
+    let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
+    if(r.status===402 || r.status===429) throw new Error(detail || "AI is at its limit for now. Try again later.");
+    if(r.status===503) throw new Error(detail || "AI is temporarily unavailable.");
+    throw new Error(detail || ("Couldn't read that plate ("+r.status+")."));
+  }
+  return await r.json();   // { fields: {...} }
 }
 // Ask a natural-language question about one home; the client sends a compact
 // context (facts + log + reminders + document names) and gets a grounded answer.
@@ -1652,7 +1687,7 @@ function StoredImg({ path, onRemove }){
   );
 }
 
-function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
+function EventSheet({ event, draft, homeId, systems, onSave, onDelete, onClose }){
   const seed = event || draft || null;   // draft = prefilled-but-unsaved (e.g. from a receipt)
   const [id] = useState(() => (seed && seed.id) || uid());
   const [title, setTitle] = useState(seed ? (seed.title||"") : "");
@@ -1660,6 +1695,7 @@ function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
   // An EXISTING entry keeps what it has, including NO date (an imported card whose
   // source carried none) - opening it must not silently stamp it with today.
   const [date, setDate] = useState(event ? (event.date||"") : (seed ? (seed.date||todayStr()) : todayStr()));
+  const [systemId, setSystemId] = useState(seed ? (seed.system_id||"") : "");
   const [cost, setCost] = useState(seed && seed.cost!=null ? String(seed.cost) : "");
   const [vendor, setVendor] = useState(seed ? (seed.vendor||"") : "");
   const [notes, setNotes] = useState(seed ? (seed.notes||"") : "");
@@ -1690,6 +1726,7 @@ function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
     if(!title.trim()) return;
     onSave({
       id, home_id: homeId, title: title.trim(), category, date: date || null,
+      system_id: systemId || null,
       cost: cost.trim()==="" ? null : (Number(cost) || 0),
       vendor: vendor.trim(), notes: notes.trim(), photos,
       receipt: receipt || (event ? event.receipt : null) || null,
@@ -1735,6 +1772,17 @@ function EventSheet({ event, draft, homeId, onSave, onDelete, onClose }){
           <label className="label">Vendor / who did it</label>
           <input className="input" value={vendor} onChange={e=>setVendor(e.target.value)} placeholder="Optional" />
         </div>
+
+        {/* Tie the work to the actual equipment, so each unit builds its own
+            service history instead of everything landing on "the house". */}
+        {systems && systems.length > 0 &&
+          <div className="field">
+            <label className="label">Which system</label>
+            <select className="select" value={systemId} onChange={e=>setSystemId(e.target.value)}>
+              <option value="">Not tied to one</option>
+              {systems.map(sy => <option key={sy.id} value={sy.id}>{sy.title}</option>)}
+            </select>
+          </div>}
 
         <div className="field">
           <label className="label">Notes</label>
@@ -2528,8 +2576,26 @@ function HomeThumb({ path }){
 // A compact, structured snapshot of one home for the Ask feature. Small enough
 // to send with each question (document list is names + categories, not contents).
 function buildHomeContext(store, home){
+  const sysById = {};
+  const systems = (store.data.systems||[]).filter(s => s.home_id === home.id)
+    .map(s => {
+      sysById[s.id] = s.title;
+      const eq = s.equipment || {};
+      const age = equipmentAge(eq.manufactureDate || eq.installedDate);
+      return {
+        name: s.title, section: s.section || null, notes: s.notes || null,
+        make: eq.make || null, model: eq.model || null, serial: eq.serial || null,
+        type: eq.equipmentType || null, capacity: eq.capacity || null,
+        refrigerant: eq.refrigerant || null,
+        manufactured: eq.manufactureDate || null,
+        age: age ? age.label : null,
+        warrantyRegistration: eq.warranty || null,
+        installedBy: s.installer || null,
+      };
+    });
   const log = (store.data.events||[]).filter(e => e.home_id === home.id)
-    .map(e => ({ title:e.title, category:e.category, date:e.date, cost:e.cost, vendor:e.vendor, notes:e.notes }));
+    .map(e => ({ title:e.title, category:e.category, date:e.date, cost:e.cost, vendor:e.vendor,
+                 system: e.system_id ? (sysById[e.system_id] || null) : null, notes:e.notes }));
   const reminders = (store.data.reminders||[]).filter(r => r.home_id === home.id)
     .map(r => ({ title:r.title, category:r.category, dueDate:r.dueDate,
       repeat: r.repeat ? (r.every + " " + r.unit) : null, done: !!r.doneAt }));
@@ -2538,7 +2604,7 @@ function buildHomeContext(store, home){
   return {
     home: { name:home.name, address:home.address, type:home.type, purchaseDate:home.purchaseDate },
     facts: home.facts || {},
-    log, reminders, documents,
+    systems, log, reminders, documents,
   };
 }
 
@@ -2631,15 +2697,29 @@ function HomeOverview({ store, home, onEdit, onGoto, onPickPhoto, onRemovePhoto 
    Grouped by section, searchable; rows swipe to delete, tap to edit. Populated
    by the Trello import and by manual entry.
    ============================================================ */
-function SystemRow({ s, onEdit, onDelete }){
+const WARRANTY_STATES = [
+  { k:"unknown",      label:"Not checked" },
+  { k:"registered",   label:"Registered" },
+  { k:"notRegistered",label:"Not registered" },
+];
+function SystemRow({ s, jobs, onEdit, onDelete }){
+  const eq = s.equipment || {};
+  const age = equipmentAge(eq.manufactureDate || eq.installedDate);
+  const spec = [eq.make, eq.model].filter(Boolean).join(" ");
   return (
     <SwipeRow onDelete={()=>onDelete(s)}>
       <div className="item">
         <button className="rem-body" onClick={()=>onEdit(s)}>
           <div className="item-title">{s.title}</div>
-          {s.notes ? <div style={{fontSize:13, color:"var(--ink-3)", marginTop:3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden"}}>{s.notes}</div> : null}
-          {(s.attachments && s.attachments.length) ?
-            <div className="item-meta"><span className="chip">{s.attachments.length} file{s.attachments.length===1?"":"s"} on Trello</span></div> : null}
+          {spec ? <div style={{fontSize:12.5, color:"var(--ink-3)", marginTop:3}}>{spec}</div>
+                : (s.notes ? <div style={{fontSize:13, color:"var(--ink-3)", marginTop:3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden"}}>{s.notes}</div> : null)}
+          {(age || jobs > 0 || (s.attachments && s.attachments.length)) &&
+            <div className="item-meta">
+              {age && <span className="chip amber">{age.label}</span>}
+              {jobs > 0 && <span className="chip">{jobs} service {jobs===1?"visit":"visits"}</span>}
+              {(s.attachments && s.attachments.length) ?
+                <span className="chip">{s.attachments.length} file{s.attachments.length===1?"":"s"} on Trello</span> : null}
+            </div>}
         </button>
         <button className="rem-done" onClick={()=>onEdit(s)} aria-label="Edit">
           <Icon d={ICONS.edit} size={16}/>
@@ -2655,6 +2735,11 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello })
   const toggle = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
 
   const all = (store.data.systems||[]).filter(s => s.home_id === home.id);
+  // How many logged visits each system has, so a row can say "3 service visits".
+  const jobCount = {};
+  (store.data.events||[]).forEach(e => {
+    if(e.home_id === home.id && e.system_id) jobCount[e.system_id] = (jobCount[e.system_id]||0) + 1;
+  });
 
   if(!all.length){
     return (
@@ -2711,7 +2796,7 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello })
             </button>
             {open &&
               <div className="list" style={{marginTop:0}}>
-                {g[1].map(s => <SystemRow key={s.id} s={s} onEdit={onEdit} onDelete={onDelete} />)}
+                {g[1].map(s => <SystemRow key={s.id} s={s} jobs={jobCount[s.id]||0} onEdit={onEdit} onDelete={onDelete} />)}
               </div>}
           </div>
         );
@@ -2720,42 +2805,149 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello })
   );
 }
 
-function SystemSheet({ system, homeId, onSave, onDelete, onClose }){
+function SystemSheet({ system, homeId, history, onSave, onDelete, onClose }){
   const s = system || {};
   const [title, setTitle] = useState(s.title || "");
   const [section, setSection] = useState(s.section || "");
   const [notes, setNotes] = useState(s.notes || "");
+  const [eq, setEq] = useState(s.equipment || {});     // nameplate facts
+  const [installer, setInstaller] = useState(s.installer || "");
+  const [scanning, setScanning] = useState("");
+  const [err, setErr] = useState("");
+  const setField = (k, v) => setEq(p => ({ ...p, [k]: v }));
+
+  // Photograph the rating plate -> upload -> AI transcribes -> fill the fields.
+  const onPlate = async (file) => {
+    if(!file) return;
+    setErr(""); setScanning("Reading the plate…");
+    try{
+      const b64 = await resizeImage(file);
+      const path = "systems/" + (s.id || "new") + "/plate-" + Date.now().toString(36) + ".jpg";
+      await uploadFile(path, b64);
+      const res = await readNameplate(path);
+      const f = (res && res.fields) || {};
+      if(!Object.keys(f).length){ setErr("Couldn't read that plate. Try a straight-on, well-lit shot."); }
+      else setEq(p => ({ ...p, ...f, platePath: path }));
+      setScanning("");
+    }catch(e){ setScanning(""); setErr(e.message || "Couldn't read that plate."); }
+  };
+
   const save = () => {
     const t = title.trim();
     if(!t) return;
     const now = nowISO();
+    const clean = {};
+    Object.keys(eq).forEach(k => { const v = String(eq[k]||"").trim(); if(v) clean[k] = v; });
     onSave({
       ...s,
       id: s.id || uid(), home_id: s.home_id || homeId,
       title: t, section: section.trim(), notes: notes.trim(),
+      equipment: Object.keys(clean).length ? clean : null,
+      installer: installer.trim(),
       attachments: s.attachments || [],
       source: s.source || "manual",
       createdAt: s.createdAt || now, updatedAt: now,
     });
   };
+
+  const age = equipmentAge(eq.manufactureDate || eq.installedDate);
+  const EQ_ROWS = [
+    ["make","Make","Carrier"], ["model","Model","25VNA860A300"], ["serial","Serial","4217E00464"],
+    ["manufactureDate","Made (YYYY-MM)","2017-10"], ["equipmentType","Type","Heat pump"],
+    ["capacity","Capacity","60,000 BTU"], ["refrigerant","Refrigerant","R-410A"],
+  ];
+
   return (
     <>
       <div className="scrim" onClick={onClose}></div>
       <div className="sheet">
         <div className="sheet-grip"></div>
         <div className="sheet-head">
-          <h2 className="sheet-title">{system ? "Edit note" : "Add a note"}</h2>
+          <h2 className="sheet-title">{system ? "Edit" : "Add a system or note"}</h2>
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <label className="field-label">Title</label>
-        <input className="input" value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. Generac 24kW generator" />
+        <input className="input" value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. HVAC - north side, Main House" />
         <label className="field-label">Section</label>
-        <input className="input" value={section} onChange={e=>setSection(e.target.value)} placeholder="e.g. Heating, Propane & Generator" />
+        <input className="input" value={section} onChange={e=>setSection(e.target.value)} placeholder="e.g. HVAC Systems" />
+
+        <div className="field-label" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+          <span>Equipment</span>
+          {age && <span className="chip amber">{age.label}</span>}
+        </div>
+        <label className="btn btn-ghost btn-block" style={{cursor:"pointer"}}>
+          <Icon d={ICONS.camera} size={16}/> {eq.model ? "Re-scan the rating plate" : "Scan the rating plate"}
+          <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+            onChange={e=>{ const f=(e.target.files||[])[0]; e.target.value=""; onPlate(f); }} />
+        </label>
+        <div className="hint">Photograph the metal data plate on the unit. The model, serial, and date of manufacture fill themselves in.</div>
+        {scanning && <div className="hint" style={{color:"var(--amber)"}}>{scanning}</div>}
+        {err && <div className="hint" style={{color:"#e08a7a"}}>{err}</div>}
+
+        {EQ_ROWS.map(([k,label,ph]) => (
+          <div key={k}>
+            <label className="field-label">{label}</label>
+            <input className="input" value={eq[k]||""} onChange={e=>setField(k, e.target.value)} placeholder={ph} />
+          </div>
+        ))}
+        <label className="field-label">Installed by</label>
+        <input className="input" value={installer} onChange={e=>setInstaller(e.target.value)} placeholder="e.g. Schmidt Mechanical Group" />
+
+        {/* Warranty registration is the single fact that decides whether parts are
+            covered, and it is knowable once and never again. Record the answer so
+            the app stops asking and starts telling. */}
+        <label className="field-label">Warranty registration</label>
+        <div className="pills">
+          {WARRANTY_STATES.map(w =>
+            <button key={w.k} className={"pill "+(( eq.warranty||"unknown")===w.k?"on":"")}
+              onClick={()=>setField("warranty", w.k)}>{w.label}</button>)}
+        </div>
+        {(() => {
+          const st = eq.warranty || "unknown";
+          if(st === "unknown" && age && age.years >= 4) return (
+            <div className="hint">
+              Parts warranties commonly run 5 years, or 10 if the unit was registered after installation.
+              At {age.label.replace(" old","")} that difference decides who pays. Ask before approving parts.
+            </div>);
+          if(st === "registered") return (
+            <div className="hint" style={{color:"var(--amber)"}}>
+              Registered, so the extended parts term (commonly 10 years) should apply.
+              {age ? " This unit is " + age.label.replace(" old","") + "." : ""} Have the contractor bill parts to the manufacturer.
+            </div>);
+          if(st === "notRegistered") return (
+            <div className="hint" style={{color:"#e08a7a"}}>
+              Not registered, so only the base parts term (commonly 5 years) ever applied
+              {age && age.years >= 5 ? " and this unit is " + age.label.replace(" old","") + ", so parts are out of pocket." : "."}
+              {" "}Get the repair quote in writing and price a replacement alongside it before deciding.
+            </div>);
+          return null;
+        })()}
+
         <label className="field-label">Details</label>
-        <textarea className="input" style={{minHeight:110, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
-          placeholder="Model numbers, install date, vendor, warranty, anything worth remembering." />
+        <textarea className="input" style={{minHeight:90, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
+          placeholder="Anything else worth remembering about this system." />
+
+        {history && history.length > 0 &&
+          <>
+            <div className="field-label">Service history ({history.length})</div>
+            <div className="list" style={{marginTop:0, maxHeight:"22vh", overflowY:"auto"}}>
+              {history.map(e => (
+                <div key={e.id} className="item">
+                  <div className="item-body">
+                    <div className="item-title">{e.title}</div>
+                    <div className="item-meta">
+                      {e.date ? <span className="chip">{fmtDate(e.date)}</span> : <span className="chip">No date</span>}
+                      {e.cost!=null && e.cost!=="" && <span className="chip">${fmtNum(e.cost)}</span>}
+                      {e.vendor && <span className="chip">{e.vendor}</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>}
+
         <button className="btn btn-primary btn-block" style={{marginTop:14}} disabled={!title.trim()} onClick={save}>
-          {system ? "Save changes" : "Add note"}
+          {system ? "Save changes" : "Add it"}
         </button>
         {system &&
           <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>onDelete(system)}>
@@ -3628,13 +3820,16 @@ function App(){
         <HomeSheet home={sheet.home} onSave={saveHome} onDelete={deleteHome} onClose={()=>setSheet(null)} />}
 
       {eventSheet && activeHome &&
-        <EventSheet event={eventSheet.event} draft={eventSheet.draft} homeId={activeHome.id} onSave={saveEvent} onDelete={deleteEvent} onClose={()=>setEventSheet(null)} />}
+        <EventSheet event={eventSheet.event} draft={eventSheet.draft} homeId={activeHome.id}
+          systems={(store.data.systems||[]).filter(x => x.home_id === activeHome.id)}
+          onSave={saveEvent} onDelete={deleteEvent} onClose={()=>setEventSheet(null)} />}
 
       {trelloReview &&
         <TrelloReviewSheet review={trelloReview} onImport={importTrelloEntries} onClose={()=>setTrelloReview(null)} />}
 
       {sysSheet && activeHome &&
         <SystemSheet system={sysSheet.system} homeId={activeHome.id}
+          history={sysSheet.system ? (store.data.events||[]).filter(e => e.system_id === sysSheet.system.id).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))) : []}
           onSave={saveSystem} onDelete={deleteSystem} onClose={()=>setSysSheet(null)} />}
 
       {remSheet && activeHome &&
