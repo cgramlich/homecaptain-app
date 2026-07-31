@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.29.0";
+const APP_VERSION = "0.30.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.11";
+const BUILD = "2026-07-31.12";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2688,7 +2688,9 @@ function HomeThumb({ path }){
 // to send with each question (document list is names + categories, not contents).
 function buildHomeContext(store, home){
   const sysById = {};
-  const systems = (store.data.systems||[]).filter(s => s.home_id === home.id)
+  const allSys = (store.data.systems||[]).filter(s => s.home_id === home.id);
+  const byId = {}; allSys.forEach(x => { byId[x.id] = x; });
+  const systems = allSys
     .map(s => {
       sysById[s.id] = s.title;
       const eq = s.equipment || {};
@@ -2702,6 +2704,9 @@ function buildHomeContext(store, home){
         age: age ? age.label : null,
         warrantyRegistration: eq.warranty || null,
         installedBy: s.installer || null,
+        // Imported notes attached to this equipment: its history and context.
+        relatedNotes: (s.linkedIds||[]).map(id => byId[id]).filter(Boolean)
+          .map(x => ({ title: x.title, notes: x.notes || null })),
       };
     });
   const log = (store.data.events||[]).filter(e => e.home_id === home.id)
@@ -2869,6 +2874,7 @@ function SystemRow({ s, jobs, onEdit, onDelete }){
             <div className="item-meta">
               {age && <span className="chip amber">{age.label}</span>}
               {jobs > 0 && <span className="chip">{jobs} service {jobs===1?"visit":"visits"}</span>}
+              {(s.linkedIds && s.linkedIds.length) ? <span className="chip">{s.linkedIds.length} linked note{s.linkedIds.length===1?"":"s"}</span> : null}
               {(s.attachments && s.attachments.length) ?
                 <span className="chip">{s.attachments.length} file{s.attachments.length===1?"":"s"} on Trello</span> : null}
             </div>}
@@ -2957,13 +2963,18 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello })
   );
 }
 
-function SystemSheet({ system, homeId, history, onSave, onDelete, onClose }){
+function SystemSheet({ system, homeId, history, siblings, onSave, onDelete, onClose }){
   const s = system || {};
   const [title, setTitle] = useState(s.title || "");
   const [section, setSection] = useState(s.section || "");
   const [notes, setNotes] = useState(s.notes || "");
   const [eq, setEq] = useState(s.equipment || {});     // nameplate facts
   const [installer, setInstaller] = useState(s.installer || "");
+  // Imported Trello cards are this equipment's history. Rather than fold them
+  // into one blob, keep them as their own notes and hang them off the record.
+  const [linkedIds, setLinkedIds] = useState(s.linkedIds || []);
+  const [linking, setLinking] = useState(false);
+  const [linkQ, setLinkQ] = useState("");
   const [scanning, setScanning] = useState("");
   const [err, setErr] = useState("");
   const setField = (k, v) => setEq(p => ({ ...p, [k]: v }));
@@ -2996,6 +3007,7 @@ function SystemSheet({ system, homeId, history, onSave, onDelete, onClose }){
       title: t, section: section.trim(), notes: notes.trim(),
       equipment: Object.keys(clean).length ? clean : null,
       installer: installer.trim(),
+      linkedIds: linkedIds.length ? linkedIds : null,
       attachments: s.attachments || [],
       source: s.source || "manual",
       createdAt: s.createdAt || now, updatedAt: now,
@@ -3078,6 +3090,66 @@ function SystemSheet({ system, homeId, history, onSave, onDelete, onClose }){
         <label className="field-label">Details</label>
         <textarea className="input" style={{minHeight:90, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
           placeholder="Anything else worth remembering about this system." />
+
+        {/* Related notes: the imported context that explains this equipment. */}
+        {(() => {
+          const pool = (siblings||[]).filter(x => x.id !== (s.id||""));
+          const linked = pool.filter(x => linkedIds.includes(x.id));
+          const words = String(title||"").toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+          const score = (x) => {
+            const hay = ((x.title||"") + " " + (x.section||"")).toLowerCase();
+            return words.reduce((n,w) => n + (hay.includes(w) ? 1 : 0), 0);
+          };
+          const q = linkQ.trim().toLowerCase();
+          const avail = pool.filter(x => !linkedIds.includes(x.id))
+            .filter(x => !q || ((x.title||"")+" "+(x.section||"")+" "+(x.notes||"")).toLowerCase().includes(q))
+            .sort((a,b) => score(b) - score(a) || String(a.title||"").localeCompare(String(b.title||"")));
+          return (
+            <>
+              <div className="field-label" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+                <span>Related notes{linked.length ? " ("+linked.length+")" : ""}</span>
+                {!linking && pool.length > 0 &&
+                  <button className="assist-toggle" style={{marginTop:0}} onClick={()=>{ setLinking(true); setLinkQ(""); }}>Attach</button>}
+              </div>
+              {linked.length > 0 &&
+                <div className="list" style={{marginTop:0}}>
+                  {linked.map(x => (
+                    <div key={x.id} className="item">
+                      <div className="item-body">
+                        <div className="item-title">{x.title}</div>
+                        {x.notes ? <div style={{fontSize:12.5, color:"var(--ink-3)", marginTop:3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden"}}>{x.notes}</div> : null}
+                      </div>
+                      <button className="rem-done" onClick={()=>setLinkedIds(ids => ids.filter(i => i !== x.id))} aria-label="Detach">
+                        <Icon d={ICONS.x} size={15}/>
+                      </button>
+                    </div>
+                  ))}
+                </div>}
+              {!linked.length && !linking &&
+                <div className="hint">Attach the imported notes that describe this equipment, and its history travels with it.</div>}
+              {linking &&
+                <>
+                  <input className="input" value={linkQ} onChange={e=>setLinkQ(e.target.value)} autoFocus
+                    placeholder="Search notes to attach" aria-label="Search notes" />
+                  <div className="list" style={{marginTop:6, maxHeight:"26vh", overflowY:"auto"}}>
+                    {avail.map(x => (
+                      <button key={x.id} className="item" onClick={()=>{ setLinkedIds(ids => [...ids, x.id]); setLinking(false); }}>
+                        <div className="item-body">
+                          <div className="item-title">{x.title}</div>
+                          <div className="item-meta">
+                            {score(x) > 0 && <span className="chip amber">likely match</span>}
+                            {x.section && <span className="chip">{x.section}</span>}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                    {!avail.length && <div className="empty" style={{padding:"22px 16px"}}><p>Nothing left to attach.</p></div>}
+                  </div>
+                  <button className="assist-toggle" style={{marginTop:6}} onClick={()=>setLinking(false)}>Done</button>
+                </>}
+            </>
+          );
+        })()}
 
         {history && history.length > 0 &&
           <>
@@ -4595,6 +4667,7 @@ function App(){
 
       {sysSheet && activeHome &&
         <SystemSheet system={sysSheet.system} homeId={activeHome.id}
+          siblings={(store.data.systems||[]).filter(x => x.home_id === activeHome.id)}
           history={sysSheet.system ? (store.data.events||[]).filter(e => e.system_id === sysSheet.system.id).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))) : []}
           onSave={saveSystem} onDelete={deleteSystem} onClose={()=>setSysSheet(null)} />}
 
