@@ -186,6 +186,9 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .backbtn{flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:var(--bg-3);border:1px solid var(--line-2);display:inline-flex;align-items:center;justify-content:center;color:var(--ink);}
 .home-card-chev{color:var(--ink-3);flex:none;align-self:center;}
 /* collapsible document sections */
+.sys-ic{flex:0 0 auto;width:38px;height:38px;border-radius:9px;background:var(--amber-dim);
+  border:1px solid var(--amber-line);color:var(--amber);display:inline-flex;align-items:center;
+  justify-content:center;margin-right:11px;overflow:hidden;}
 .doc-group{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;padding:18px 2px 8px;text-align:left;color:var(--ink-3);}
 .doc-group-title{font-family:'Outfit';font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:var(--ink-3);}
 .doc-group-count{font-size:11px;font-weight:600;color:var(--ink-3);background:var(--bg-4);border-radius:999px;padding:1px 8px;}
@@ -320,9 +323,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.31.0";
+const APP_VERSION = "0.32.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.13";
+const BUILD = "2026-07-31.14";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1302,9 +1305,50 @@ const ICONS = {
   eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
   trash:   ["M3 6h18","M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2","M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6","M10 11v6","M14 11v6"],
   tool:    ["M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"],
+  // --- equipment icons: a system should look like what it is ---
+  air:     ["M9.59 4.59A2 2 0 1 1 11 8H2","M12.59 19.41A2 2 0 1 0 14 16H2","M17.73 7.73A2.5 2.5 0 1 1 19.5 12H2"],
+  flame:   ["M12 2c1.5 3.5 5 5.5 5 9.5a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5.2 1.4 1 2.4 2 2.4 1.2 0 1.8-1.2 1.4-2.6C12.1 5.6 12 3.8 12 2z"],
+  droplet: ["M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"],
+  bolt:    ["M13 2L3 14h9l-1 8 10-12h-9z"],
+  wifi:    ["M5 12.55a11 11 0 0 1 14.08 0","M1.42 9a16 16 0 0 1 21.16 0","M8.53 16.11a6 6 0 0 1 6.95 0","M12 20h.01"],
+  waves:   ["M2 8c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0","M2 14c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0","M2 20c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0"],
+  leaf:    ["M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z","M2 21c0-3 1.85-5.36 5.08-6"],
+  garage:  ["M3 21V9l9-6 9 6v12","M7 21v-7h10v7","M7 17h10"],
+  security:["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z","M9 12l2 2 4-4"],
+  sun:     ["M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z","M12 1v2","M12 21v2","M4.22 4.22l1.42 1.42","M18.36 18.36l1.42 1.42","M1 12h2","M21 12h2","M4.22 19.78l1.42-1.42","M18.36 5.64l1.42-1.42"],
+  fridge:  ["M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z","M4 10h16","M8 6v2","M8 14v2"],
   wrenchAlert:["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"],
   shield:  ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
 };
+
+
+// An equipment record should look like what it is. Read the nameplate type
+// first (most reliable), then the title, then the section it was filed under.
+const SYSTEM_ICON_RULES = [
+  [/heat pump|air cond|\bac\b|\bhvac\b|condenser|air handler|mini.?split|\bcooling\b/i, "air"],
+  // water before fire: "Water Heater" is plumbing, not a furnace
+  [/water heater|tankless|plumb|water softener|\bwater\b|filtration|\bfilter\b|sump|\bwell\b|septic|aerobic/i, "droplet"],
+  [/furnace|boiler|fireplace|\bgas\b|propane|\bheater\b|\bheating\b/i, "flame"],
+  [/generator|generac|electric|\bpanel\b|breaker|\bwiring\b|inverter/i, "bolt"],
+  [/security|\balarm\b|\bring\b|\block\b|monitor|\bcamera/i, "security"],
+  [/wifi|network|router|mesh|\baudio\b|\bav\b|smart home|\btv\b|internet/i, "wifi"],
+  [/\bpool\b|\bspa\b|hot tub|\bpump\b|\bpentair\b/i, "waves"],
+  [/garage|driveway|\bgate\b/i, "garage"],
+  [/\broof|gutter|attic|\bsiding\b|\bsolar\b|exterior/i, "sun"],
+  [/irrigation|sprinkler|landscap|\blawn\b|\btree|garden|fenc/i, "leaf"],
+  [/refrigerat|appliance|dishwasher|\brange\b|\boven\b|cooktop|microwave|washer|dryer|laundry|kitchen/i, "fridge"],
+];
+function systemIcon(sys){
+  const eq = (sys && sys.equipment) || {};
+  // The title (and the nameplate's own type) describes the thing; the section
+  // only describes where it was filed. Try the specific signal first, or a
+  // generator filed under "Heating, Propane & Generator" comes out a furnace.
+  const specific = [eq.equipmentType, sys && sys.title].filter(Boolean).join(" ");
+  for(const [re, key] of SYSTEM_ICON_RULES){ if(re.test(specific)) return ICONS[key]; }
+  const section = (sys && sys.section) || "";
+  for(const [re, key] of SYSTEM_ICON_RULES){ if(re.test(section)) return ICONS[key]; }
+  return ICONS.tool;                                  // a note, not a machine
+}
 
 /* ============================================================
    SWIPE ROW - the portfolio-standard swipe-left-to-delete (from Tracker).
@@ -1767,7 +1811,7 @@ function StoredImg({ path, onRemove }){
   );
 }
 
-function EventSheet({ event, draft, homeId, systems, onSave, onDelete, onClose }){
+function EventSheet({ event, draft, homeId, systems, onCreateSystem, onSave, onDelete, onClose }){
   const seed = event || draft || null;   // draft = prefilled-but-unsaved (e.g. from a receipt)
   const [id] = useState(() => (seed && seed.id) || uid());
   const [title, setTitle] = useState(seed ? (seed.title||"") : "");
@@ -1858,7 +1902,8 @@ function EventSheet({ event, draft, homeId, systems, onSave, onDelete, onClose }
         {systems && systems.length > 0 &&
           <div className="field">
             <label className="label">Which system</label>
-            <SystemPicker systems={systems} value={systemId} onChange={setSystemId} placeholder="Not tied to one" />
+            <SystemPicker systems={systems} value={systemId} onChange={setSystemId} placeholder="Not tied to one"
+              onCreate={onCreateSystem ? (t)=>onCreateSystem(t, homeId) : null} />
           </div>}
 
         <div className="field">
@@ -2864,6 +2909,17 @@ function jobState(k){ return JOB_STATES.find(s => s.k === k) || JOB_STATES[0]; }
 function isJobOpen(j){ return !jobState(j.status).done; }
 const POLICY_KINDS = ["Home warranty", "Homeowners insurance", "Service plan", "Other"];
 
+// The unit's own photo, signed on demand. Falls back to its icon when absent.
+function SysThumb({ path }){
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    let ok = true;
+    if(path) signFile(path).then(u => { if(ok) setUrl(u); }).catch(()=>{});
+    return () => { ok = false; };
+  }, [path]);
+  return <span className="sys-ic" style={url ? {backgroundImage:"url("+url+")", backgroundSize:"cover", backgroundPosition:"center"} : {}} />;
+}
+
 function SystemRow({ s, jobs, onEdit, onDelete }){
   const eq = s.equipment || {};
   const age = equipmentAge(eq.manufactureDate || eq.installedDate);
@@ -2871,6 +2927,9 @@ function SystemRow({ s, jobs, onEdit, onDelete }){
   return (
     <SwipeRow onDelete={()=>onDelete(s)}>
       <div className="item">
+        {s.photo
+          ? <SysThumb path={s.photo} />
+          : <span className="sys-ic"><Icon d={systemIcon(s)} size={17}/></span>}
         <button className="rem-body" onClick={()=>onEdit(s)}>
           <div className="item-title">{s.title}</div>
           {spec ? <div style={{fontSize:12.5, color:"var(--ink-3)", marginTop:3}}>{spec}</div>
@@ -2980,9 +3039,24 @@ function SystemSheet({ system, homeId, history, siblings, onSave, onDelete, onCl
   const [linkedIds, setLinkedIds] = useState(s.linkedIds || []);
   const [linking, setLinking] = useState(false);
   const [linkQ, setLinkQ] = useState("");
+  const [photo, setPhoto] = useState(s.photo || null);
   const [scanning, setScanning] = useState("");
   const [err, setErr] = useState("");
   const setField = (k, v) => setEq(p => ({ ...p, [k]: v }));
+
+  // A picture of the unit itself, distinct from the rating plate: it is what
+  // makes the list readable at a glance, and what you show a contractor.
+  const onPhoto = async (file) => {
+    if(!file) return;
+    setErr(""); setScanning("Adding the photo…");
+    try{
+      const b64 = await resizeImage(file);
+      const path = "systems/" + (s.id || "new") + "/photo-" + Date.now().toString(36) + ".jpg";
+      await uploadFile(path, b64);
+      if(photo && photo !== path) deleteFile(photo);
+      setPhoto(path); setScanning("");
+    }catch(e){ setScanning(""); setErr(e.message || "Couldn't add that photo."); }
+  };
 
   // Photograph the rating plate -> upload -> AI transcribes -> fill the fields.
   const onPlate = async (file) => {
@@ -3011,7 +3085,7 @@ function SystemSheet({ system, homeId, history, siblings, onSave, onDelete, onCl
       id: s.id || uid(), home_id: s.home_id || homeId,
       title: t, section: section.trim(), notes: notes.trim(),
       equipment: Object.keys(clean).length ? clean : null,
-      installer: installer.trim(),
+      installer: installer.trim(), photo: photo || null,
       linkedIds: linkedIds.length ? linkedIds : null,
       attachments: s.attachments || [],
       source: s.source || "manual",
@@ -3044,6 +3118,21 @@ function SystemSheet({ system, homeId, history, siblings, onSave, onDelete, onCl
           <span>Equipment</span>
           {age && <span className="chip amber">{age.label}</span>}
         </div>
+        <div style={{display:"flex", alignItems:"center", gap:12, marginBottom:10}}>
+          <span className="sys-ic" style={{width:52, height:52, borderRadius:11}}>
+            <Icon d={systemIcon({ title, section, equipment: eq })} size={22}/>
+          </span>
+          <div style={{flex:1, display:"flex", gap:8}}>
+            <label className="assist-toggle" style={{marginTop:0, cursor:"pointer"}}>
+              {photo ? "Replace photo" : "Add a photo of it"}
+              <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+                onChange={e=>{ const f=(e.target.files||[])[0]; e.target.value=""; onPhoto(f); }} />
+            </label>
+            {photo && <button className="assist-toggle" style={{marginTop:0}}
+              onClick={()=>{ deleteFile(photo); setPhoto(null); }}>Remove</button>}
+          </div>
+        </div>
+        {photo && <StoredImg path={photo} onRemove={()=>{ deleteFile(photo); setPhoto(null); }} />}
         <label className="btn btn-ghost btn-block" style={{cursor:"pointer"}}>
           <Icon d={ICONS.camera} size={16}/> {eq.model ? "Re-scan the rating plate" : "Scan the rating plate"}
           <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
@@ -3415,7 +3504,7 @@ function CoverageScreen({ store, home, onAdd, onEdit, onDelete }){
    native <select>: the list also holds vendors, contact lists and general
    notes, so the real equipment has to be findable rather than scrolled to.
    Inline rather than a nested sheet, which would stack scrims. */
-function SystemPicker({ systems, value, onChange, placeholder }){
+function SystemPicker({ systems, value, onChange, onCreate, placeholder }){
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const chosen = (systems||[]).find(s => s.id === value) || null;
@@ -3443,6 +3532,15 @@ function SystemPicker({ systems, value, onChange, placeholder }){
       <input className="input" value={q} onChange={e=>setQ(e.target.value)} autoFocus
         placeholder={"Search " + (systems||[]).length + " systems & notes"} aria-label="Search systems" />
       <div className="list" style={{marginTop:6, maxHeight:"34vh", overflowY:"auto"}}>
+        {/* Nothing fits? Name it here rather than leaving and losing your place. */}
+        {onCreate && q.trim() && !matched.some(x => (x.title||"").toLowerCase() === q.trim().toLowerCase()) &&
+          <button className="item" onClick={()=>{ const id = onCreate(q.trim()); if(id){ onChange(id); setOpen(false); } }}>
+            <span className="sys-ic"><Icon d={ICONS.plus} size={16}/></span>
+            <div className="item-body">
+              <div className="item-title">Create "{q.trim()}"</div>
+              <div className="item-meta"><span className="chip amber">new system</span></div>
+            </div>
+          </button>}
         <button className="item" onClick={()=>{ onChange(""); setOpen(false); }}>
           <div className="item-body"><div className="item-title" style={{opacity:.7}}>Not tied to a system</div></div>
         </button>
@@ -3452,6 +3550,7 @@ function SystemPicker({ systems, value, onChange, placeholder }){
           const spec = [eq.make, eq.model].filter(Boolean).join(" ");
           return (
             <button key={s.id} className="item" onClick={()=>{ onChange(s.id); setOpen(false); }}>
+              <span className="sys-ic"><Icon d={systemIcon(s)} size={16}/></span>
               <div className="item-body">
                 <div className="item-title">{s.title}</div>
                 <div className="item-meta">
@@ -3491,7 +3590,7 @@ function JobRow({ j, systemName, spend, onOpen, onDelete }){
   );
 }
 
-function JobSheet({ job, homeId, homes, systems, policies, history, onSave, onDelete, onLogVisit, onClose }){
+function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSystem, onSave, onDelete, onLogVisit, onClose }){
   const j = job || {};
   const [title, setTitle] = useState(j.title || "");
   const [symptom, setSymptom] = useState(j.symptom || "");
@@ -3555,7 +3654,8 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onSave, onDe
         {mySystems.length > 0 &&
           <>
             <label className="field-label">Which system</label>
-            <SystemPicker systems={mySystems} value={systemId} onChange={setSystemId} />
+            <SystemPicker systems={mySystems} value={systemId} onChange={setSystemId}
+              onCreate={onCreateSystem ? (t)=>onCreateSystem(t, ownerHome) : null} />
           </>}
 
         {/* The repair-or-replace context, on screen while the decision is live. */}
@@ -4303,6 +4403,19 @@ function App(){
   };
 
   // ---- systems & notes ----
+  // Create a bare system inline (from a picker) and hand back its id, so an
+  // issue can attach to equipment that did not exist a second ago.
+  const createSystemQuick = (title, forHome) => {
+    const t = String(title||"").trim();
+    if(!t) return null;
+    const now = nowISO();
+    const rec = { id: uid(), home_id: forHome, title: t, section: "", notes: "",
+                  equipment: null, installer: "", photo: null, linkedIds: null,
+                  source: "manual", createdAt: now, updatedAt: now };
+    store.saveCollection("systems", [rec, ...(store.data.systems||[])]);
+    showToast("Added " + t + " - scan its plate in Systems & Notes");
+    return rec.id;
+  };
   const saveSystem = (rec) => {
     const list = store.data.systems || [];
     const next = list.some(s => s.id === rec.id) ? list.map(s => s.id===rec.id ? rec : s) : [rec, ...list];
@@ -4640,6 +4753,7 @@ function App(){
       {eventSheet && activeHome &&
         <EventSheet event={eventSheet.event} draft={eventSheet.draft} homeId={activeHome.id}
           systems={(store.data.systems||[]).filter(x => x.home_id === activeHome.id)}
+          onCreateSystem={createSystemQuick}
           onSave={saveEvent} onDelete={deleteEvent} onClose={()=>setEventSheet(null)} />}
 
       {trelloReview &&
@@ -4652,6 +4766,7 @@ function App(){
           policies={store.data.policies||[]}
           history={jobSheet.job ? (store.data.events||[]).filter(e => e.job_id === jobSheet.job.id)
             .sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))) : []}
+          onCreateSystem={createSystemQuick}
           onSave={saveJob} onDelete={deleteJob} onLogVisit={logVisitForJob} onClose={()=>setJobSheet(null)} />}
 
       {covChooser && activeHome &&
