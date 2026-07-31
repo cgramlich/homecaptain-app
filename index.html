@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.23.0";
+const APP_VERSION = "0.24.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.1";
+const BUILD = "2026-07-31.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -552,6 +552,23 @@ async function parseTrello(cards){
     throw new Error(detail || ("Couldn't read that board ("+r.status+")."));
   }
   return await r.json();   // { entries: [...] }
+}
+// Read a coverage document (already stored) into policy fields.
+async function parsePolicy(path){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/policy/parse", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ path })
+  });
+  if(!r.ok){
+    let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
+    if(r.status===402 || r.status===429) throw new Error(detail || "AI is at its limit for now. Try again later.");
+    if(r.status===503) throw new Error(detail || "AI is temporarily unavailable.");
+    throw new Error(detail || ("Couldn't read that document ("+r.status+")."));
+  }
+  return await r.json();   // { fields: {...} }
 }
 // Read an equipment rating plate (already uploaded) into structured fields.
 async function readNameplate(path){
@@ -3023,23 +3040,35 @@ function SystemSheet({ system, homeId, history, onSave, onDelete, onClose }){
 /* ============================================================
    COVERAGE (home warranty / insurance policies on a property)
    ============================================================ */
-function PolicySheet({ policy, homeId, onSave, onDelete, onClose }){
-  const p = policy || {};
+function PolicySheet({ policy, homeId, prefill, sourceDoc, onSave, onDelete, onClose }){
+  // A brand-new policy can arrive pre-read from a document; an existing one
+  // always wins over a prefill so editing never gets overwritten by a re-read.
+  const p = policy || prefill || {};
   const [provider, setProvider] = useState(p.provider || "");
-  const [kind, setKind] = useState(p.kind || POLICY_KINDS[0]);
+  const [kind, setKind] = useState(POLICY_KINDS.indexOf(p.kind) >= 0 ? p.kind : POLICY_KINDS[0]);
+  const [planName, setPlanName] = useState(p.planName || "");
   const [policyNo, setPolicyNo] = useState(p.policyNo || "");
   const [phone, setPhone] = useState(p.phone || "");
-  const [renewal, setRenewal] = useState(p.renewal || "");
+  const [serviceFee, setServiceFee] = useState(p.serviceFee || "");
+  const [effective, setEffective] = useState(p.effectiveDate || p.effective || "");
+  const [renewal, setRenewal] = useState(p.renewalDate || p.renewal || "");
+  const [coveredSystems, setCoveredSystems] = useState(p.coveredSystems || "");
+  const [coveredAppliances, setCoveredAppliances] = useState(p.coveredAppliances || "");
   const [notes, setNotes] = useState(p.notes || "");
+  const doc = sourceDoc || (policy && policy.doc) || null;
   const save = () => {
     const pr = provider.trim();
     if(!pr) return;
     const now = nowISO();
     onSave({
-      ...p, id: p.id || uid(), home_id: p.home_id || homeId,
-      provider: pr, kind, policyNo: policyNo.trim(), phone: phone.trim(),
-      renewal: renewal || null, notes: notes.trim(),
-      createdAt: p.createdAt || now, updatedAt: now,
+      ...(policy || {}), id: (policy && policy.id) || uid(), home_id: (policy && policy.home_id) || homeId,
+      provider: pr, kind, planName: planName.trim(), policyNo: policyNo.trim(), phone: phone.trim(),
+      serviceFee: serviceFee.trim(),
+      effective: effective || null, renewal: renewal || null,
+      coveredSystems: coveredSystems.trim(), coveredAppliances: coveredAppliances.trim(),
+      doc: doc ? { id: doc.id, name: doc.name, path: doc.path } : ((policy && policy.doc) || null),
+      notes: notes.trim(),
+      createdAt: (policy && policy.createdAt) || now, updatedAt: now,
     });
   };
   return (
@@ -3058,15 +3087,38 @@ function PolicySheet({ policy, homeId, onSave, onDelete, onClose }){
           {POLICY_KINDS.map(k =>
             <button key={k} className={"pill "+(kind===k?"on":"")} onClick={()=>setKind(k)}>{k}</button>)}
         </div>
-        <label className="field-label">Policy number</label>
+        <label className="field-label">Plan name</label>
+        <input className="input" value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="e.g. ShieldComplete Buyer" />
+        <label className="field-label">Policy / plan number</label>
         <input className="input" value={policyNo} onChange={e=>setPolicyNo(e.target.value)} placeholder="Optional" />
         <label className="field-label">Claims phone</label>
         <input className="input" type="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Optional" />
-        <label className="field-label">Renews</label>
-        <input className="input" type="date" value={renewal||""} onChange={e=>setRenewal(e.target.value)} />
+        <label className="field-label">Service fee per visit</label>
+        <input className="input" value={serviceFee} onChange={e=>setServiceFee(e.target.value)} placeholder="e.g. $100.00" />
+        <div className="hint">The number to weigh against a contractor's own diagnostic charge.</div>
+        <div className="row">
+          <div className="field" style={{flex:1}}>
+            <label className="field-label">Effective</label>
+            <input className="input" type="date" value={effective||""} onChange={e=>setEffective(e.target.value)} />
+          </div>
+          <div className="field" style={{flex:1}}>
+            <label className="field-label">Renews</label>
+            <input className="input" type="date" value={renewal||""} onChange={e=>setRenewal(e.target.value)} />
+          </div>
+        </div>
+        <label className="field-label">Covered systems</label>
+        <textarea className="input" style={{minHeight:64, resize:"vertical"}} value={coveredSystems}
+          onChange={e=>setCoveredSystems(e.target.value)} placeholder="e.g. Heating; Air Conditioning System; Ductwork" />
+        <label className="field-label">Covered appliances</label>
+        <textarea className="input" style={{minHeight:56, resize:"vertical"}} value={coveredAppliances}
+          onChange={e=>setCoveredAppliances(e.target.value)} placeholder="Optional" />
+        {doc &&
+          <div className="hint" style={{marginTop:8}}>
+            Read from <strong>{doc.name}</strong>, kept in your documents.
+          </div>}
         <label className="field-label">Notes</label>
-        <textarea className="input" style={{minHeight:80, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
-          placeholder="What it covers, deductible / trade call fee, how to file." />
+        <textarea className="input" style={{minHeight:70, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
+          placeholder="Waiting periods, caps, how to file." />
         <button className="btn btn-primary btn-block" style={{marginTop:14}} disabled={!provider.trim()} onClick={save}>
           {policy ? "Save changes" : "Add coverage"}
         </button>
@@ -3074,6 +3126,89 @@ function PolicySheet({ policy, homeId, onSave, onDelete, onClose }){
           <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>onDelete(policy)}>
             <Icon d={ICONS.trash} size={15}/> Delete
           </button>}
+      </div>
+    </>
+  );
+}
+
+/* Three ways to add coverage, ordered by how much typing they save: read a
+   document already filed, upload the document (it lands in the vault like any
+   other, categorized and deduped), or key it in. */
+function CoverageChooser({ onFromDocs, onUpload, onManual, onClose }){
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Add coverage</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <div style={{display:"flex", flexDirection:"column", gap:10}}>
+          <button className="btn btn-ghost btn-block" onClick={onFromDocs}>
+            <Icon d={ICONS.doc} size={17}/> Find it in my documents
+          </button>
+          <button className="btn btn-ghost btn-block" onClick={onUpload}>
+            <Icon d={ICONS.upload} size={17}/> Upload the policy document
+          </button>
+          <button className="btn btn-ghost btn-block" onClick={onManual}>
+            <Icon d={ICONS.edit} size={17}/> Enter it by hand
+          </button>
+        </div>
+        <div className="hint">Either of the first two reads the plan and fills the form in. An uploaded document is filed with the rest of your documents.</div>
+      </div>
+    </>
+  );
+}
+
+// Pick a stored document to read. Coverage-looking ones surface first, but
+// everything stays searchable, because filing is never perfect.
+function DocPickerSheet({ docs, onPick, onClose }){
+  const [q, setQ] = useState("");
+  const query = q.trim().toLowerCase();
+  const likely = (d) => {
+    const hay = ((d.name||"") + " " + (d.sourceName||"") + " " + migrateDocCat(d.category)).toLowerCase();
+    return /warrant|insur|policy|coverage|home shield|\bahs\b|plan|declaration|dec page/.test(hay);
+  };
+  const matched = query
+    ? docs.filter(d => ((d.name||"") + " " + (d.sourceName||"")).toLowerCase().includes(query))
+    : docs.filter(likely);
+  const sorted = matched.slice().sort((a,b) =>
+    (likely(b)?1:0) - (likely(a)?1:0) ||
+    String(a.name||"").localeCompare(String(b.name||""), undefined, {numeric:true}));
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Which document?</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <input className="input" value={q} onChange={e=>setQ(e.target.value)}
+          placeholder="Search all documents" aria-label="Search documents" autoFocus />
+        <div className="hint">
+          {query ? matched.length + " match" + (matched.length===1?"":"es")
+                 : "Showing likely coverage documents. Search to see all " + docs.length + "."}
+        </div>
+        <div className="list" style={{marginTop:6, maxHeight:"46vh", overflowY:"auto"}}>
+          {sorted.map(d => (
+            <button key={d.id} className="item" onClick={()=>onPick(d)}>
+              <div className="item-body">
+                <div className="item-title">{d.name}</div>
+                <div className="item-meta">
+                  <span className="chip">{migrateDocCat(d.category)}</span>
+                  <span className="chip">{fileKind(d.path, d.mime)}</span>
+                  {d.size ? <span className="chip">{humanSize(d.size)}</span> : null}
+                </div>
+              </div>
+            </button>
+          ))}
+          {!sorted.length &&
+            <div className="empty" style={{padding:"30px 20px"}}>
+              <p>{query ? 'Nothing matches "'+q+'".' : "No likely coverage documents found. Search by name."}</p>
+            </div>}
+        </div>
       </div>
     </>
   );
@@ -3105,8 +3240,10 @@ function CoverageScreen({ store, home, onAdd, onEdit, onDelete }){
             <div className="item">
               <button className="rem-body" onClick={()=>onEdit(p)}>
                 <div className="item-title">{p.provider}</div>
+                {p.planName ? <div style={{fontSize:12.5, color:"var(--ink-3)", marginTop:3}}>{p.planName}</div> : null}
                 <div className="item-meta">
                   <span className="chip">{p.kind}</span>
+                  {p.serviceFee && <span className="chip amber">{p.serviceFee} per visit</span>}
                   {p.policyNo && <span className="chip">#{p.policyNo}</span>}
                   {p.phone && <span className="chip">{p.phone}</span>}
                   {p.renewal && <span className="chip">renews {fmtDate(p.renewal)}</span>}
@@ -3391,7 +3528,9 @@ function App(){
   const [docSheet, setDocSheet] = useState(null);       // null | {doc}
   const [sysSheet, setSysSheet] = useState(null);       // null | {system}
   const [jobSheet, setJobSheet] = useState(null);       // null | {job}
-  const [polSheet, setPolSheet] = useState(null);       // null | {policy}
+  const [polSheet, setPolSheet] = useState(null);       // null | {policy, prefill, sourceDoc}
+  const [covChooser, setCovChooser] = useState(false);
+  const [docPicker, setDocPicker] = useState(false);
   const [docBusy, setDocBusy] = useState("");           // "" | "Adding 3 of 16..."
   const [importOpen, setImportOpen] = useState(false);
   const [trelloReview, setTrelloReview] = useState(null);
@@ -3402,6 +3541,7 @@ function App(){
   const receiptFileRef = useRef(null);
   const trelloFileRef = useRef(null);
   const homePhotoRef = useRef(null);
+  const policyFileRef = useRef(null);
   const homePhotoTargetRef = useRef(null);
   // webkitdirectory can't be set through JSX reliably, so stamp it on the hidden
   // folder input after mount. `directory` covers Firefox. This makes the picker
@@ -3570,7 +3710,7 @@ function App(){
   // ---- document handlers ----
   // Batch add: each picked file becomes its own auto-classified document. Uploads
   // run one at a time so the progress count is honest and memory stays bounded.
-  const addDocuments = async (fileList, homeId) => {
+  const addDocuments = async (fileList, homeId, quiet) => {
     const files = Array.from(fileList || []);
     if(!files.length) return;
     // Snapshot existing docs so re-selecting the whole folder dedupes against
@@ -3629,7 +3769,10 @@ function App(){
     if(revised) parts.push(revised + " updated");
     if(unchanged) parts.push(unchanged + " unchanged");
     if(skipped) parts.push(skipped + " skipped");
-    showToast(parts.length ? parts.join(", ") : "Nothing added");
+    if(!quiet) showToast(parts.length ? parts.join(", ") : "Nothing added");
+    // Return what landed so callers (e.g. adding coverage from a document) can
+    // act on the stored record instead of re-uploading it down a side channel.
+    return { added, replaced: Object.values(replacements) };
   };
   const pickDocuments = (kind) => {
     const ref = kind === "photos" ? docPhotoRef : kind === "folder" ? docDirRef : docFileRef;
@@ -3846,6 +3989,40 @@ function App(){
     setJobSheet(null);
     setEventSheet({ event:null, draft:{ job_id: job.id, system_id: systemId || job.system_id || null,
                                         title:"", category:"Service" } });
+  };
+  // --- adding coverage: read a filed document, upload one, or type it in ---
+  const readPolicyDoc = async (doc) => {
+    setDocPicker(false); setCovChooser(false);
+    if(!doc || !doc.path){ showToast("That document has no file to read."); return; }
+    setDocBusy("Reading the policy…");
+    try{
+      const res = await parsePolicy(doc.path);
+      const fields = (res && res.fields) || {};
+      setDocBusy("");
+      if(!Object.keys(fields).length){
+        showToast("Couldn't find policy details in that document. Fill it in by hand.");
+        setPolSheet({ policy:null, prefill:null, sourceDoc:doc });
+        return;
+      }
+      setPolSheet({ policy:null, prefill:fields, sourceDoc:doc });
+      showToast("Read " + Object.keys(fields).length + " details from " + doc.name);
+    }catch(e){ setDocBusy(""); showToast(e.message || "Couldn't read that document."); }
+  };
+  // Upload path: the file goes through the NORMAL document pipeline first, so it
+  // is categorized, deduped and searchable like everything else, and only then
+  // is it read for policy details.
+  const onPolicyFile = async (e) => {
+    const file = (e.target.files||[])[0];
+    e.target.value = "";
+    if(!file) return;
+    const homes = store.data.homes || [];
+    const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
+    if(!ah) return;
+    setCovChooser(false);
+    const res = await addDocuments([file], ah.id, true);
+    const rec = (res && (res.added[0] || res.replaced[0])) || null;
+    if(!rec){ showToast("Couldn't file that document."); return; }
+    await readPolicyDoc(rec);
   };
   const savePolicy = (rec) => {
     const list = store.data.policies || [];
@@ -4117,7 +4294,7 @@ function App(){
                                      onDeleteJob={(j)=>{ if(confirm("Delete this issue? Its log entries are kept.")) deleteJob(j); }}
                                      onDelete={(e)=>{ if(confirm("Delete this log entry?")) deleteEvent(e.id); }} />
               : tab==="coverage" ? <CoverageScreen store={store} home={activeHome}
-                                     onAdd={()=>setPolSheet({policy:null})} onEdit={(p)=>setPolSheet({policy:p})}
+                                     onAdd={()=>setCovChooser(true)} onEdit={(p)=>setPolSheet({policy:p})}
                                      onDelete={(p)=>{ if(confirm("Delete this coverage record?")) deletePolicy(p); }} />
               : tab==="systems"  ? <SystemsScreen store={store} home={activeHome}
                                      onAdd={()=>setSysSheet({system:null})} onEdit={(s)=>setSysSheet({system:s})}
@@ -4144,6 +4321,7 @@ function App(){
       <input ref={receiptFileRef} type="file" accept="application/pdf,image/*" style={{display:"none"}} onChange={onReceiptFile} />
       <input ref={trelloFileRef} type="file" accept=".json,application/json,text/json,text/plain" style={{display:"none"}} onChange={onTrelloFile} />
       <input ref={homePhotoRef} type="file" accept="image/*" style={{display:"none"}} onChange={onHomePhotoFile} />
+      <input ref={policyFileRef} type="file" accept="application/pdf,image/*" style={{display:"none"}} onChange={onPolicyFile} />
       {docBusy && <div className="toast">{docBusy}</div>}
 
       {importOpen && activeHome &&
@@ -4207,8 +4385,20 @@ function App(){
             .sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))) : []}
           onSave={saveJob} onDelete={deleteJob} onLogVisit={logVisitForJob} onClose={()=>setJobSheet(null)} />}
 
+      {covChooser && activeHome &&
+        <CoverageChooser
+          onFromDocs={()=>{ setCovChooser(false); setDocPicker(true); }}
+          onUpload={()=>{ if(policyFileRef.current) policyFileRef.current.click(); }}
+          onManual={()=>{ setCovChooser(false); setPolSheet({policy:null}); }}
+          onClose={()=>setCovChooser(false)} />}
+
+      {docPicker && activeHome &&
+        <DocPickerSheet docs={(store.data.documents||[]).filter(d => d.home_id === activeHome.id)}
+          onPick={readPolicyDoc} onClose={()=>setDocPicker(false)} />}
+
       {polSheet && activeHome &&
         <PolicySheet policy={polSheet.policy} homeId={activeHome.id}
+          prefill={polSheet.prefill} sourceDoc={polSheet.sourceDoc}
           onSave={savePolicy} onDelete={deletePolicy} onClose={()=>setPolSheet(null)} />}
 
       {sysSheet && activeHome &&
