@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.26.2";
+const APP_VERSION = "0.27.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.8";
+const BUILD = "2026-07-31.9";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -921,17 +921,24 @@ function migrateDocCat(cat){ return CATEGORY_REMAP[cat] || cat || "Other"; }
 const DOC_RULES = [
   [/rcpoa|\bpoa\b|\bhoa\b|homeowners? assoc|owners? association|property owners|\bdccr|cc&r|\bccr\b|\bacc\b|architectural|articles of incorp|covenant|bylaw/i, "HOA"],
   [/\bphoto\b|\bphotos\b|\bpicture\b/i, "Photos"],
-  [/survey|\btitle\b|t.?47|\bplat\b|legal descr|parcel|easement/i, "Title & Survey"],
-  [/closing|amendment|addendum|financing|earnest|option fee|one.?to.?four|purchase agreement|purchase contract|residential contract|residential agreement|sales contract|settlement|\bdeed\b|promissory|escrow instruction|disclos|lead.?based|brokerage|non.?realty|information about/i, "Purchase & Closing"],
-  [/insur|\bpolicy\b|flood cert|home.?warranty|american home shield|\bahs\b|\bclaim/i, "Insurance"],
-  [/\bpec\b|pedernales|cooperative|\bco-?op\b|\belectric|internet|\butilit|\btrash\b|\bsewer\b|\bkwh\b|generator|breaker|water bill|gas bill/i, "Utilities"],
+  // Tenancy before anything else: a lease is a contract and rent is a payment,
+  // so without this they get claimed by Purchase or Financial.
+  [/\bleases?\b|\btenants?\b|\brent(al|als|s)?\b|back.?house/i, "Rental"],
+  // A named piece of equipment beats the generic service/repair words below.
+  [/product (registration|confirmation)|\bcoils?\b|condenser|air.?handler|compressor|\bpentair\b|\bcarrier\b|\btrane\b|lennox|rheem|\bgenerac\b|jenn.?air|sub.?zero|kitchenaid/i, "Systems & Appliances"],
+  [/survey|\btitle\b|t.?47|\bplat\b|legal descr|parcel|easement|floor plan|architect|sight line|site plan/i, "Title & Survey"],
+  [/closing|amendment|addendum|financing|earnest|option fee|one.?to.?four|purchase agreement|purchase contract|purchase analysis|residential contract|residential agreement|sales contract|signed contract|construction contract|settlement|\bdeed\b|promissory|escrow instruction|disclos|lead.?based|brokerage|non.?realty|information about|zillow|\blisting\b|\bbuilder\b|affidavit|waiver of lien|moving checklist/i, "Purchase & Closing"],
+  [/insur|\bpolicy\b|flood cert|home.?warranty|american home shield|\bahs\b|\bclaim|declarations?\b|endorsement|umbrella|restoration|adjuster|certificate of satisfaction/i, "Insurance"],
+  [/\bpec\b|pedernales|cooperative|\bco-?op\b|\belectric|internet|\butilit|\btrash\b|\bsewer\b|\bkwh\b|generator|breaker|water bill|gas bill|monthly.?usage|usage.?and.?cost/i, "Utilities"],
   [/warrant|\bmanual\b|owner.?s guide|spec sheet|how.?to|\bguide\b|instructions/i, "Warranties & Manuals"],
   [/permit|remodel|renovat|\baddition\b|contractor|\bestimate\b|\bbid\b|blueprint|improvement|repaint|\bproject\b/i, "Improvements & Permits"],
-  [/repair|\bservice\b|inspection|\bhvac\b|plumb|\broof|pest|maintenance|furnace|water heater|tune.?up|gutter|landscap|\blawn\b|septic|aerobic|\bossf\b|\bpump|backflow|filter|sprinkler|\bpools?\b|\bspa\b|cleaning/i, "Maintenance & Repairs"],
-  [/mortgage|loan statement|escrow|1098|property tax|\btax\b|amortiz|payoff|refinance|deed of trust|appraisal|pre.?approval|pre.?qual/i, "Mortgage & Taxes"],
+  [/repair|\bservice\b|inspection|\bhvac\b|plumb|\broof|pest|maintenance|furnace|water heater|tune.?up|gutter|landscap|\blawn\b|septic|aerobic|\bossf\b|\bpump|backflow|filter|sprinkler|\bpools?\b|\bspa\b|cleaning|garage door/i, "Maintenance & Repairs"],
+  // Income and return forms are tax documents, so they belong with taxes rather
+  // than falling through to the generic "statements" rule below.
+  [/mortgage|loan statement|escrow|1098|property tax|\btax\b|amortiz|payoff|refinance|deed of trust|appraisal|pre.?approval|pre.?qual|\b1040\b|\bw-?2s?\b|pay.?stub|\b1065\b|\b8879\b|\b1120\b|comparable|funds transfer/i, "Mortgage & Taxes"],
   [/\bp&l\b|profit and loss|balance sheet|statements?|\bcma\b|financials|\bledger\b|net worth|\bk-1\b|1099/i, "Financial & Statements"],
   [/gmail|\bemail\b|\bletter\b|correspond|\bnotice\b|\bappeal\b|\bmemo\b/i, "Correspondence"],
-  [/receipt|order confirmation|\binvoice\b|purchase order/i, "Receipts & Purchases"],
+  [/receipt|order confirmation|\binvoice\b|purchase order|\binventory\b/i, "Receipts & Purchases"],
   [/\.(jpe?g|png|heic|heif|gif|webp|bmp|tiff?)$/i, "Photos"],
 ];
 // A folder someone deliberately filed a document into is a stronger signal than
@@ -1920,14 +1927,21 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImpor
   const misdated = events.filter(e => e.source === "trello" && e.date && e.createdAt &&
                                       e.date === String(e.createdAt).slice(0,10));
   if(!events.length){
+    // An open issue with no visits logged against it yet still belongs on this
+    // screen: saying "nothing logged" while something is actively broken reads
+    // as though the issue was lost.
     return (
-      <div className="empty">
-        <div className="glyph">+</div>
-        <h3 className="title-sm">Nothing logged yet</h3>
-        <p>Log a repair, maintenance job, improvement, or inspection for {home.name} — with photos and cost.</p>
-        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}><Icon d={ICONS.plus} size={16}/> Log an entry</button>
-        <button className="btn btn-ghost" style={{marginTop:10}} onClick={onAddReceipt}><Icon d={ICONS.doc} size={16}/> Add from a receipt</button>
-        <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}><Icon d={ICONS.upload} size={16}/> Import from Trello</button>
+      <div>
+        <OpenIssues store={store} home={home} onOpenJob={onOpenJob} onNewJob={onNewJob} onDeleteJob={onDeleteJob} />
+        <div className="empty">
+          <div className="glyph">+</div>
+          <h3 className="title-sm">Nothing logged yet</h3>
+          <p>Log a repair, maintenance job, improvement, or inspection for {home.name} — with photos and cost.</p>
+          <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}><Icon d={ICONS.plus} size={16}/> Log an entry</button>
+          <button className="btn btn-ghost" style={{marginTop:10}} onClick={onNewJob}><Icon d={ICONS.tool} size={16}/> Report something broken</button>
+          <button className="btn btn-ghost" style={{marginTop:10}} onClick={onAddReceipt}><Icon d={ICONS.doc} size={16}/> Add from a receipt</button>
+          <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}><Icon d={ICONS.upload} size={16}/> Import from Trello</button>
+        </div>
       </div>
     );
   }
