@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.22.0";
+const APP_VERSION = "0.23.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-24.14";
+const BUILD = "2026-07-31.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -379,7 +379,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(NS+k, JSON.stringify(v)); }
 const lsDel = (k) => { try { localStorage.removeItem(NS+k); } catch(e){} };
 
 // One per-record JSONB collection per entity (mirrors the backend COLLECTIONS).
-const FILES = ["homes","events","documents","reminders","systems"];
+const FILES = ["homes","events","documents","reminders","systems","jobs","policies"];
 
 /* ============================================================
    BACKEND + AUTH CONFIG
@@ -1229,6 +1229,8 @@ const ICONS = {
   eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
   trash:   ["M3 6h18","M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2","M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6","M10 11v6","M14 11v6"],
   tool:    ["M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"],
+  wrenchAlert:["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"],
+  shield:  ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
 };
 
 /* ============================================================
@@ -1726,7 +1728,7 @@ function EventSheet({ event, draft, homeId, systems, onSave, onDelete, onClose }
     if(!title.trim()) return;
     onSave({
       id, home_id: homeId, title: title.trim(), category, date: date || null,
-      system_id: systemId || null,
+      system_id: systemId || null, job_id: (seed && seed.job_id) || null,
       cost: cost.trim()==="" ? null : (Number(cost) || 0),
       vendor: vendor.trim(), notes: notes.trim(), photos,
       receipt: receipt || (event ? event.receipt : null) || null,
@@ -1822,7 +1824,28 @@ function EventSheet({ event, draft, homeId, systems, onSave, onDelete, onClose }
   );
 }
 
-function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImportTrello, onClearImportedDates }){
+function OpenIssues({ store, home, onOpenJob, onNewJob, onDeleteJob }){
+  const jobs = (store.data.jobs||[]).filter(j => j.home_id === home.id);
+  const open = jobs.filter(isJobOpen)
+    .sort((a,b)=> String(b.openedAt||"").localeCompare(String(a.openedAt||"")));
+  const sysName = {};
+  (store.data.systems||[]).forEach(s => { sysName[s.id] = s.title; });
+  const spendOf = (jid) => (store.data.events||[])
+    .filter(e => e.job_id === jid).reduce((s,e)=> s + (Number(e.cost)||0), 0);
+  if(!open.length) return null;
+  return (
+    <div style={{marginBottom:6}}>
+      <div className="set-group">Open {open.length===1?"issue":"issues"}</div>
+      <div className="list" style={{marginTop:0}}>
+        {open.map(j => <JobRow key={j.id} j={j} systemName={j.system_id ? sysName[j.system_id] : ""}
+          spend={spendOf(j.id)} onOpen={onOpenJob} onDelete={onDeleteJob} />)}
+      </div>
+    </div>
+  );
+}
+
+function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImportTrello, onClearImportedDates,
+                    onOpenJob, onNewJob, onDeleteJob }){
   const events = (store.data.events||[])
     .filter(e => e.home_id === home.id)
     .sort((a,b)=> String(b.date||"").localeCompare(String(a.date||"")) || String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
@@ -1845,9 +1868,11 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImpor
   const total = events.reduce((s,e)=> s + (Number(e.cost)||0), 0);
   return (
     <div>
+      <OpenIssues store={store} home={home} onOpenJob={onOpenJob} onNewJob={onNewJob} onDeleteJob={onDeleteJob} />
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
         <div className="log-summary">{events.length} {events.length===1?"entry":"entries"}{total>0 ? " · $"+fmtNum(total)+" total" : ""}</div>
         <div style={{display:"flex", gap:12}}>
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onNewJob}>Something broke</button>
           <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAddReceipt}>Add receipt</button>
           <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onImportTrello}>Import Trello</button>
         </div>
@@ -2096,7 +2121,7 @@ async function openStoredFile(path, onErr){
 
 /* Add sheet opened by the center + in the bottom nav (portfolio nav standard).
    One place for every in-home create; no action is pre-highlighted. */
-function AddSheet({ onLog, onReminder, onDocs, onNote, onTrello, onClose }){
+function AddSheet({ onLog, onReminder, onDocs, onNote, onTrello, onIssue, onClose }){
   return (
     <>
       <div className="scrim" onClick={onClose}></div>
@@ -2107,6 +2132,7 @@ function AddSheet({ onLog, onReminder, onDocs, onNote, onTrello, onClose }){
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <div style={{display:"flex", flexDirection:"column", gap:10}}>
+          <button className="btn btn-ghost btn-block" onClick={onIssue}><Icon d={ICONS.wrenchAlert} size={17}/> Something broke</button>
           <button className="btn btn-ghost btn-block" onClick={onLog}><Icon d={ICONS.log} size={17}/> Log entry</button>
           <button className="btn btn-ghost btn-block" onClick={onReminder}><Icon d={ICONS.bell} size={17}/> Reminder</button>
           <button className="btn btn-ghost btn-block" onClick={onDocs}><Icon d={ICONS.doc} size={17}/> Documents</button>
@@ -2645,6 +2671,8 @@ function HomeOverview({ store, home, onEdit, onGoto, onPickPhoto, onRemovePhoto 
   const docs   = (store.data.documents||[]).filter(d => d.home_id === home.id);
   const events = (store.data.events||[]).filter(e => e.home_id === home.id);
   const systems= (store.data.systems||[]).filter(s => s.home_id === home.id);
+  const policies = (store.data.policies||[]).filter(p => p.home_id === home.id);
+  const openJobs = (store.data.jobs||[]).filter(j => j.home_id === home.id && isJobOpen(j));
   const rems   = (store.data.reminders||[]).filter(r => r.home_id === home.id && !r.doneAt);
   const overdue = rems.filter(r => remStatus(r) === "overdue").length;
   const dueSoon = rems.filter(r => { const s = remStatus(r); return s==="today" || s==="soon"; }).length;
@@ -2671,6 +2699,18 @@ function HomeOverview({ store, home, onEdit, onGoto, onPickPhoto, onRemovePhoto 
 
       <WeatherStrip home={home} />
 
+      {/* Something is broken RIGHT NOW: that outranks everything else here. */}
+      {openJobs.length > 0 &&
+        <button className="hub-card" style={{width:"100%", marginBottom:12, borderColor:"var(--amber-line)", background:"var(--amber-dim)"}}
+          onClick={()=>onGoto("log")}>
+          <span className="hub-card-ic" style={{color:"var(--amber)"}}><Icon d={ICONS.wrenchAlert} size={19}/></span>
+          <span className="hub-card-body">
+            <span className="hub-card-title">{openJobs.length === 1 ? openJobs[0].title : openJobs.length + " open issues"}</span>
+            <span className="hub-card-sub">{openJobs.length === 1 ? jobState(openJobs[0].status).label : "Needs attention"}</span>
+          </span>
+          <span className="hub-card-chev"><Icon d={ICONS.chev} size={18}/></span>
+        </button>}
+
       <AskBox store={store} home={home} />
 
       {chips.length>0 && <div className="facts">{chips}</div>}
@@ -2681,6 +2721,8 @@ function HomeOverview({ store, home, onEdit, onGoto, onPickPhoto, onRemovePhoto 
         <HubCard icon={ICONS.log}  title="Log" onClick={()=>onGoto("log")}
           sub={events.length ? events.length + (events.length===1?" entry":" entries") + (spend>0 ? " · $"+fmtNum(spend):"") : "Nothing logged"} />
         <HubCard icon={ICONS.bell} title="Reminders" onClick={()=>onGoto("remind")} sub={remSub} />
+        <HubCard icon={ICONS.shield} title="Coverage" onClick={()=>onGoto("coverage")}
+          sub={policies.length ? policies.map(p=>p.provider).join(", ").slice(0,42) : "Warranty & insurance"} />
         <HubCard icon={ICONS.tool} title="Systems & Notes" onClick={()=>onGoto("systems")}
           sub={systems.length ? systems.length + (systems.length===1?" note":" notes") : "Equipment & reference"} />
       </div>
@@ -2702,6 +2744,26 @@ const WARRANTY_STATES = [
   { k:"registered",   label:"Registered" },
   { k:"notRegistered",label:"Not registered" },
 ];
+
+/* ============================================================
+   JOBS - one problem from symptom to resolution. A broken system is a story,
+   not a row: the diagnostic, the home-warranty claim, the second opinion and
+   the eventual fix all belong to the same thing. Money still lives in `events`
+   (each visit is a normal Log entry carrying job_id), so spend and history are
+   never split across two sources of truth.
+   ============================================================ */
+const JOB_STATES = [
+  { k:"open",      label:"Open",             done:false },
+  { k:"diagnosed", label:"Diagnosed",        done:false },
+  { k:"coverage",  label:"Awaiting coverage",done:false },
+  { k:"quoted",    label:"Quoted",           done:false },
+  { k:"scheduled", label:"Scheduled",        done:false },
+  { k:"resolved",  label:"Resolved",         done:true  },
+];
+function jobState(k){ return JOB_STATES.find(s => s.k === k) || JOB_STATES[0]; }
+function isJobOpen(j){ return !jobState(j.status).done; }
+const POLICY_KINDS = ["Home warranty", "Homeowners insurance", "Service plan", "Other"];
+
 function SystemRow({ s, jobs, onEdit, onDelete }){
   const eq = s.equipment || {};
   const age = equipmentAge(eq.manufactureDate || eq.installedDate);
@@ -2959,6 +3021,272 @@ function SystemSheet({ system, homeId, history, onSave, onDelete, onClose }){
 }
 
 /* ============================================================
+   COVERAGE (home warranty / insurance policies on a property)
+   ============================================================ */
+function PolicySheet({ policy, homeId, onSave, onDelete, onClose }){
+  const p = policy || {};
+  const [provider, setProvider] = useState(p.provider || "");
+  const [kind, setKind] = useState(p.kind || POLICY_KINDS[0]);
+  const [policyNo, setPolicyNo] = useState(p.policyNo || "");
+  const [phone, setPhone] = useState(p.phone || "");
+  const [renewal, setRenewal] = useState(p.renewal || "");
+  const [notes, setNotes] = useState(p.notes || "");
+  const save = () => {
+    const pr = provider.trim();
+    if(!pr) return;
+    const now = nowISO();
+    onSave({
+      ...p, id: p.id || uid(), home_id: p.home_id || homeId,
+      provider: pr, kind, policyNo: policyNo.trim(), phone: phone.trim(),
+      renewal: renewal || null, notes: notes.trim(),
+      createdAt: p.createdAt || now, updatedAt: now,
+    });
+  };
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{policy ? "Edit coverage" : "Add coverage"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <label className="field-label">Provider</label>
+        <input className="input" value={provider} onChange={e=>setProvider(e.target.value)} placeholder="e.g. American Home Shield" autoFocus />
+        <label className="field-label">Type</label>
+        <div className="pills">
+          {POLICY_KINDS.map(k =>
+            <button key={k} className={"pill "+(kind===k?"on":"")} onClick={()=>setKind(k)}>{k}</button>)}
+        </div>
+        <label className="field-label">Policy number</label>
+        <input className="input" value={policyNo} onChange={e=>setPolicyNo(e.target.value)} placeholder="Optional" />
+        <label className="field-label">Claims phone</label>
+        <input className="input" type="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Optional" />
+        <label className="field-label">Renews</label>
+        <input className="input" type="date" value={renewal||""} onChange={e=>setRenewal(e.target.value)} />
+        <label className="field-label">Notes</label>
+        <textarea className="input" style={{minHeight:80, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
+          placeholder="What it covers, deductible / trade call fee, how to file." />
+        <button className="btn btn-primary btn-block" style={{marginTop:14}} disabled={!provider.trim()} onClick={save}>
+          {policy ? "Save changes" : "Add coverage"}
+        </button>
+        {policy &&
+          <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>onDelete(policy)}>
+            <Icon d={ICONS.trash} size={15}/> Delete
+          </button>}
+      </div>
+    </>
+  );
+}
+
+function CoverageScreen({ store, home, onAdd, onEdit, onDelete }){
+  const all = (store.data.policies||[]).filter(p => p.home_id === home.id);
+  if(!all.length){
+    return (
+      <div className="empty">
+        <div className="glyph">◇</div>
+        <h3 className="title-sm">No coverage recorded</h3>
+        <p>Home warranty, homeowners insurance, service plans. Recording them here means that when something breaks, {home.name} reminds you to file a claim before you authorize the work.</p>
+        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+          <Icon d={ICONS.plus} size={16}/> Add coverage
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+        <div className="log-summary">{all.length} {all.length===1?"policy":"policies"}</div>
+        <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
+      </div>
+      <div className="list">
+        {all.map(p => (
+          <SwipeRow key={p.id} onDelete={()=>onDelete(p)}>
+            <div className="item">
+              <button className="rem-body" onClick={()=>onEdit(p)}>
+                <div className="item-title">{p.provider}</div>
+                <div className="item-meta">
+                  <span className="chip">{p.kind}</span>
+                  {p.policyNo && <span className="chip">#{p.policyNo}</span>}
+                  {p.phone && <span className="chip">{p.phone}</span>}
+                  {p.renewal && <span className="chip">renews {fmtDate(p.renewal)}</span>}
+                </div>
+              </button>
+              <button className="rem-done" onClick={()=>onEdit(p)} aria-label="Edit"><Icon d={ICONS.edit} size={16}/></button>
+            </div>
+          </SwipeRow>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   JOB SHEET - the whole incident on one screen
+   ============================================================ */
+function JobRow({ j, systemName, spend, onOpen, onDelete }){
+  const st = jobState(j.status);
+  return (
+    <SwipeRow onDelete={()=>onDelete(j)}>
+      <div className={"item"+(st.done?" muted":"")}>
+        <button className="rem-body" onClick={()=>onOpen(j)}>
+          <div className="item-title">{j.title}</div>
+          <div className="item-meta">
+            <span className={"chip "+(st.done?"":"amber")}>{st.label}</span>
+            {systemName && <span className="chip">{systemName}</span>}
+            {spend > 0 && <span className="chip">${fmtNum(spend)}</span>}
+            {j.openedAt && <span className="chip">opened {fmtDate(j.openedAt)}</span>}
+          </div>
+        </button>
+        <button className="rem-done" onClick={()=>onOpen(j)} aria-label="Open"><Icon d={ICONS.chev} size={16}/></button>
+      </div>
+    </SwipeRow>
+  );
+}
+
+function JobSheet({ job, homeId, systems, policies, history, onSave, onDelete, onLogVisit, onClose }){
+  const j = job || {};
+  const [title, setTitle] = useState(j.title || "");
+  const [symptom, setSymptom] = useState(j.symptom || "");
+  const [systemId, setSystemId] = useState(j.system_id || "");
+  const [status, setStatus] = useState(j.status || "open");
+  const [cov, setCov] = useState(j.coverage || {});
+  const [notes, setNotes] = useState(j.notes || "");
+  const setCovField = (k,v) => setCov(p => ({ ...p, [k]: v }));
+
+  const sys = (systems||[]).find(s => s.id === systemId) || null;
+  const eq = (sys && sys.equipment) || {};
+  const age = equipmentAge(eq.manufactureDate || eq.installedDate);
+  const spend = (history||[]).reduce((s,e) => s + (Number(e.cost)||0), 0);
+
+  const save = () => {
+    const t = title.trim();
+    if(!t) return;
+    const now = nowISO();
+    const clean = {};
+    Object.keys(cov).forEach(k => { const v = String(cov[k]||"").trim(); if(v) clean[k] = v; });
+    onSave({
+      ...j, id: j.id || uid(), home_id: j.home_id || homeId,
+      title: t, symptom: symptom.trim(), system_id: systemId || null,
+      status, coverage: Object.keys(clean).length ? clean : null, notes: notes.trim(),
+      openedAt: j.openedAt || todayStr(),
+      resolvedAt: jobState(status).done ? (j.resolvedAt || todayStr()) : null,
+      createdAt: j.createdAt || now, updatedAt: now,
+    });
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{job ? "Issue" : "What's wrong?"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        <label className="field-label">What's happening</label>
+        <input className="input" value={title} onChange={e=>setTitle(e.target.value)}
+          placeholder="e.g. North AC not cooling" autoFocus={!job} />
+
+        {systems && systems.length > 0 &&
+          <>
+            <label className="field-label">Which system</label>
+            <select className="select" value={systemId} onChange={e=>setSystemId(e.target.value)}>
+              <option value="">Not sure yet</option>
+              {systems.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+            </select>
+          </>}
+
+        {/* The repair-or-replace context, on screen while the decision is live. */}
+        {sys && (eq.model || age) &&
+          <div className="hint" style={{marginTop:8}}>
+            {[eq.make, eq.model].filter(Boolean).join(" ")}
+            {age ? " · " + age.label : ""}
+            {eq.warranty === "notRegistered" ? " · not registered, parts out of pocket"
+              : eq.warranty === "registered" ? " · warranty registered" : ""}
+          </div>}
+
+        <label className="field-label">Status</label>
+        <div className="pills">
+          {JOB_STATES.map(s =>
+            <button key={s.k} className={"pill "+(status===s.k?"on":"")} onClick={()=>setStatus(s.k)}>{s.label}</button>)}
+        </div>
+
+        {/* Coverage: the prompt that stops money going out the door needlessly. */}
+        <label className="field-label">Coverage</label>
+        {policies && policies.length > 0 ? (
+          <>
+            <select className="select" value={cov.policyId||""} onChange={e=>setCovField("policyId", e.target.value)}>
+              <option value="">Not using coverage</option>
+              {policies.map(p => <option key={p.id} value={p.id}>{p.provider}{p.kind ? " · "+p.kind : ""}</option>)}
+            </select>
+            {cov.policyId && !String(cov.claimNo||"").trim() &&
+              <div className="hint" style={{color:"var(--amber)"}}>
+                File the claim before authorizing any work. Most policies only pay for repairs their own
+                contractor diagnoses, so work you arrange first usually isn't reimbursed.
+              </div>}
+            {cov.policyId &&
+              <>
+                <label className="field-label">Claim number</label>
+                <input className="input" value={cov.claimNo||""} onChange={e=>setCovField("claimNo", e.target.value)} placeholder="Once filed" />
+                <label className="field-label">What they determined</label>
+                <textarea className="input" style={{minHeight:64, resize:"vertical"}} value={cov.determination||""}
+                  onChange={e=>setCovField("determination", e.target.value)} placeholder="Covered, denied, partial, and why." />
+              </>}
+          </>
+        ) : (
+          <div className="hint">No coverage recorded for this home yet. Add a home warranty or insurance policy under Coverage and it will show up here.</div>
+        )}
+
+        <label className="field-label">Symptom &amp; details</label>
+        <textarea className="input" style={{minHeight:80, resize:"vertical"}} value={symptom} onChange={e=>setSymptom(e.target.value)}
+          placeholder="What it's doing, when it started, any codes shown." />
+
+        {job &&
+          <>
+            <div className="field-label" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+              <span>Timeline{history && history.length ? " ("+history.length+")" : ""}</span>
+              {spend > 0 && <span className="chip">${fmtNum(spend)} so far</span>}
+            </div>
+            {history && history.length > 0 ? (
+              <div className="list" style={{marginTop:0, maxHeight:"24vh", overflowY:"auto"}}>
+                {history.map(e => (
+                  <div key={e.id} className="item">
+                    <div className="item-body">
+                      <div className="item-title">{e.title}</div>
+                      <div className="item-meta">
+                        {e.date ? <span className="chip">{fmtDate(e.date)}</span> : <span className="chip">No date</span>}
+                        {e.cost!=null && e.cost!=="" && <span className="chip">${fmtNum(e.cost)}</span>}
+                        {e.vendor && <span className="chip">{e.vendor}</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : <div className="hint">Nothing logged against this issue yet.</div>}
+            <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>onLogVisit(job, systemId)}>
+              <Icon d={ICONS.plus} size={15}/> Log a visit or estimate
+            </button>
+          </>}
+
+        <label className="field-label">Notes</label>
+        <textarea className="input" style={{minHeight:64, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
+          placeholder="Questions to ask, who said what." />
+
+        <button className="btn btn-primary btn-block" style={{marginTop:14}} disabled={!title.trim()} onClick={save}>
+          {job ? "Save changes" : "Open the issue"}
+        </button>
+        {job &&
+          <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>onDelete(job)}>
+            <Icon d={ICONS.trash} size={15}/> Delete
+          </button>}
+      </div>
+    </>
+  );
+}
+
+/* ============================================================
    APP SHELL
    ============================================================ */
 const TRELLO_GROUPS = [
@@ -3049,7 +3377,7 @@ const HOME_TABS = [
   { key:"log",      label:"Log",       icon:ICONS.log  },
   { key:"remind",   label:"Reminders", icon:ICONS.bell },
 ];
-const SECTION_LABELS = { overview:"Home", docs:"Docs", log:"Log", remind:"Reminders", systems:"Systems & Notes" };
+const SECTION_LABELS = { overview:"Home", docs:"Docs", log:"Log", remind:"Reminders", systems:"Systems & Notes", coverage:"Coverage" };
 
 function App(){
   const store = useStore();
@@ -3062,6 +3390,8 @@ function App(){
   const [remSheet, setRemSheet] = useState(null);       // null | {reminder, preset}
   const [docSheet, setDocSheet] = useState(null);       // null | {doc}
   const [sysSheet, setSysSheet] = useState(null);       // null | {system}
+  const [jobSheet, setJobSheet] = useState(null);       // null | {job}
+  const [polSheet, setPolSheet] = useState(null);       // null | {policy}
   const [docBusy, setDocBusy] = useState("");           // "" | "Adding 3 of 16..."
   const [importOpen, setImportOpen] = useState(false);
   const [trelloReview, setTrelloReview] = useState(null);
@@ -3494,6 +3824,42 @@ function App(){
     showToast(list.length + " moved to \"No date\"");
   };
 
+  // ---- jobs (one problem, start to finish) + coverage ----
+  const saveJob = (rec) => {
+    const list = store.data.jobs || [];
+    const exists = list.some(j => j.id === rec.id);
+    store.saveCollection("jobs", exists ? list.map(j => j.id===rec.id ? rec : j) : [rec, ...list]);
+    setJobSheet(null);
+    showToast(exists ? "Issue updated" : "Issue opened");
+  };
+  const deleteJob = (j) => {
+    // The visits stay in the Log; they just stop belonging to an issue.
+    store.saveCollection("jobs", (store.data.jobs||[]).filter(x => x.id !== j.id));
+    const evs = store.data.events || [];
+    if(evs.some(e => e.job_id === j.id))
+      store.saveCollection("events", evs.map(e => e.job_id === j.id ? {...e, job_id:null, updatedAt:nowISO()} : e));
+    setJobSheet(null);
+    showToast("Issue deleted, its log entries kept");
+  };
+  // Log a visit straight onto an issue: the new entry inherits job + system.
+  const logVisitForJob = (job, systemId) => {
+    setJobSheet(null);
+    setEventSheet({ event:null, draft:{ job_id: job.id, system_id: systemId || job.system_id || null,
+                                        title:"", category:"Service" } });
+  };
+  const savePolicy = (rec) => {
+    const list = store.data.policies || [];
+    const exists = list.some(p => p.id === rec.id);
+    store.saveCollection("policies", exists ? list.map(p => p.id===rec.id ? rec : p) : [rec, ...list]);
+    setPolSheet(null);
+    showToast(exists ? "Coverage updated" : "Coverage added");
+  };
+  const deletePolicy = (p) => {
+    store.saveCollection("policies", (store.data.policies||[]).filter(x => x.id !== p.id));
+    setPolSheet(null);
+    showToast("Coverage deleted");
+  };
+
   // ---- systems & notes ----
   const saveSystem = (rec) => {
     const list = store.data.systems || [];
@@ -3747,7 +4113,12 @@ function App(){
               : tab==="log"      ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})}
                                      onAddReceipt={pickReceipt} onImportTrello={pickTrello}
                                      onClearImportedDates={clearImportedDates}
+                                     onOpenJob={(j)=>setJobSheet({job:j})} onNewJob={()=>setJobSheet({job:null})}
+                                     onDeleteJob={(j)=>{ if(confirm("Delete this issue? Its log entries are kept.")) deleteJob(j); }}
                                      onDelete={(e)=>{ if(confirm("Delete this log entry?")) deleteEvent(e.id); }} />
+              : tab==="coverage" ? <CoverageScreen store={store} home={activeHome}
+                                     onAdd={()=>setPolSheet({policy:null})} onEdit={(p)=>setPolSheet({policy:p})}
+                                     onDelete={(p)=>{ if(confirm("Delete this coverage record?")) deletePolicy(p); }} />
               : tab==="systems"  ? <SystemsScreen store={store} home={activeHome}
                                      onAdd={()=>setSysSheet({system:null})} onEdit={(s)=>setSysSheet({system:s})}
                                      onImportTrello={pickTrello}
@@ -3813,6 +4184,7 @@ function App(){
           onReminder={()=>{ setAddSheet(false); setRemSheet({reminder:null, preset:null}); }}
           onDocs={()=>{ setAddSheet(false); openImport(); }}
           onNote={()=>{ setAddSheet(false); setSysSheet({system:null}); }}
+          onIssue={()=>{ setAddSheet(false); setJobSheet({job:null}); }}
           onTrello={()=>{ setAddSheet(false); pickTrello(); }}
           onClose={()=>setAddSheet(false)} />}
 
@@ -3826,6 +4198,18 @@ function App(){
 
       {trelloReview &&
         <TrelloReviewSheet review={trelloReview} onImport={importTrelloEntries} onClose={()=>setTrelloReview(null)} />}
+
+      {jobSheet && activeHome &&
+        <JobSheet job={jobSheet.job} homeId={activeHome.id}
+          systems={(store.data.systems||[]).filter(x => x.home_id === activeHome.id)}
+          policies={(store.data.policies||[]).filter(x => x.home_id === activeHome.id)}
+          history={jobSheet.job ? (store.data.events||[]).filter(e => e.job_id === jobSheet.job.id)
+            .sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))) : []}
+          onSave={saveJob} onDelete={deleteJob} onLogVisit={logVisitForJob} onClose={()=>setJobSheet(null)} />}
+
+      {polSheet && activeHome &&
+        <PolicySheet policy={polSheet.policy} homeId={activeHome.id}
+          onSave={savePolicy} onDelete={deletePolicy} onClose={()=>setPolSheet(null)} />}
 
       {sysSheet && activeHome &&
         <SystemSheet system={sysSheet.system} homeId={activeHome.id}
