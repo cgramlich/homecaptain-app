@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.35.0";
+const APP_VERSION = "0.36.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.17";
+const BUILD = "2026-07-31.18";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3017,9 +3017,16 @@ function OrganiseSheet({ review, onApply, onClose }){
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <div className="hint" style={{marginBottom:10}}>
-          {rows.length} entries read. {changed.length} would change. Nothing is deleted or merged, only
-          renamed and re-sorted, and whatever you untick is left exactly as it is.
+          {rows.length} entries read
+          {review.localCount != null ? " - " + review.localCount + " sorted on the spot, " + review.aiCount + " needed a closer look" : ""}.
+          {" "}{changed.length} would change. Nothing is deleted or merged, only renamed and re-sorted,
+          and whatever you untick is left exactly as it is.
         </div>
+        {rows.some(r => r.needsSplit) &&
+          <div className="hint" style={{color:"var(--amber)", marginBottom:8}}>
+            {rows.filter(r=>r.needsSplit).length} {rows.filter(r=>r.needsSplit).length===1?"entry holds":"entries hold"} both
+            a contact and equipment details. Those are really two records - filed as equipment for now, worth splitting by hand.
+          </div>}
         <div style={{display:"flex", gap:12, marginBottom:8}}>
           <button className="assist-toggle" onClick={()=>setSel(changed.map(r=>r.id))}>All changes</button>
           <button className="assist-toggle" onClick={()=>setSel([])}>None</button>
@@ -3050,8 +3057,13 @@ function OrganiseSheet({ review, onApply, onClose }){
                           {r.section && <span className="chip">{r.section}</span>}
                           {r.trade && <span className="chip amber">{r.trade}</span>}
                           {r.phone && <span className="chip">{r.phone}</span>}
+                          {r.needsSplit && <span className="chip red">two records?</span>}
+                          {r.confidence === "ai" ? <span className="chip">asked AI</span>
+                            : r.confidence === "high" ? <span className="chip green">certain</span>
+                            : r.confidence === "medium" ? <span className="chip">likely</span> : null}
                           {!r.changed && <span className="chip">already fine</span>}
                         </div>
+                        {r.why && <div style={{fontSize:11.5, color:"var(--ink-3)", marginTop:3}}>{r.why}</div>}
                       </div>
                     </button>
                   );
@@ -3073,6 +3085,76 @@ function OrganiseSheet({ review, onApply, onClose }){
 // things that happened to arrive in one Trello bucket. One component, three
 // views: an entry with no kind yet counts as unsorted and stays with Systems,
 // so nothing disappears before the tidy-up has been run.
+/* ============================================================
+   ENTRY CLASSIFIER - local, deterministic, no network.
+
+   Field PRESENCE is a stronger signal than vocabulary. A phone number and a
+   street address mean a person you call; a model number and a capacity mean a
+   machine. That distinction is what stops the trade-name collision: a company
+   called "JB Aire HVAC Service Provider" is full of system vocabulary and is
+   still obviously a vendor, because it has a phone number and no model number.
+
+   So bare trade words (hvac, plumbing, electric) score NOTHING on their own.
+   Only concrete equipment evidence counts as equipment.
+
+   Returns { kind, confidence, why }. kind may be "mixed", meaning both sides
+   scored and the record probably wants splitting - which is a question for the
+   owner, not something to silently pick a side on.
+   ============================================================ */
+const RX_PHONE   = /(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
+const RX_ADDRESS = /\d{2,6}\s+[A-Za-z][A-Za-z.'-]*(\s+[A-Za-z.'-]+)*\s+(rd|road|st|street|ave|avenue|dr|drive|ln|lane|blvd|boulevard|hwy|highway|way|ct|court|pkwy|trail|tr)\b/i;
+const RX_EMAIL   = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+const RX_SERIAL  = /\b(serial|s\/n|ser#)\b|\b[A-Z0-9]{4,}[0-9]{3,}[A-Z0-9]*\b/;
+const RX_MODEL    = /\b(model|mfg|part)\s*(no\.?|number|#|:)/i;
+const RX_CAPACITY = /\b\d+(\.\d+)?\s?(ton|tons|btu|kw|kva|gal|gallon|seer|amp|volts?)\b/i;
+const RX_INSTALL  = /\b(installed|install date|manufactured|date of manufacture|in service|replaced in)\b/i;
+const RX_INTERVAL = /\b(every|annually|quarterly|monthly|semi.?annual|each (spring|fall|year|month))\b/i;
+const RX_MAKE     = /\b(carrier|trane|lennox|rheem|goodman|bryant|generac|kohler|pentair|hayward|jandy|jenn.?air|sub.?zero|kitchenaid|bosch|rinnai|navien|aosmith|a\.o\. smith|rainbird|hunter|ruud|amana|daikin|mitsubishi)\b/i;
+const RX_COMPANY  = /\b(inc\.?|llc|l\.l\.c\.|co\.|corp\.?|company|services?|service provider|contractors?|contracting|plumbing co|& sons|group|specialists?)\b/i;
+const RX_PERSON   = /\b(contact|call|ask for|owner|technician|tech\b|rep\b|foreman|person for|guy for|handyman)\b/i;
+const RX_NOTEISH  = /\b(checklist|locations?|overview|quick reference|summary|planning|to.?do|shutoffs?|where to find|list of)\b/i;
+
+function classifyEntry(e){
+  const title = String((e && e.title) || "");
+  const notes = String((e && e.notes) || "");
+  const text  = title + " \n " + notes;
+  const eq    = (e && e.equipment) || {};
+  let vendor = 0, system = 0;
+  const why = [];
+
+  // --- vendor evidence: someone you contact
+  if(RX_PHONE.test(text))    { vendor += 3; why.push("phone number"); }
+  if(RX_ADDRESS.test(text))  { vendor += 2; why.push("street address"); }
+  if(RX_EMAIL.test(text))    { vendor += 1; why.push("email"); }
+  if(RX_COMPANY.test(title)) { vendor += 2; why.push("company name"); }
+  if(RX_PERSON.test(text))   { vendor += 1; why.push("a person to call"); }
+
+  // --- equipment evidence: a machine with an identity
+  if(eq.model || eq.serial || eq.make) { system += 4; why.push("nameplate on file"); }
+  if(RX_SERIAL.test(text))   { system += 3; why.push("serial number"); }
+  if(RX_MODEL.test(text))    { system += 3; why.push("model number"); }
+  if(RX_MAKE.test(text))     { system += 2; why.push("equipment make"); }
+  if(RX_CAPACITY.test(text)) { system += 2; why.push("rated capacity"); }
+  if(RX_INSTALL.test(text))  { system += 2; why.push("install date"); }
+  if(RX_INTERVAL.test(text)) { system += 1; why.push("service interval"); }
+
+  const strong = 3;                       // enough evidence to stand on its own
+  if(vendor >= strong && system >= strong)
+    return { kind:"mixed", confidence:"low",
+             why:"has both a contact and equipment details - probably two records" };
+
+  const margin = Math.abs(vendor - system);
+  const conf = margin >= 3 ? "high" : margin >= 1 ? "medium" : "low";
+
+  if(vendor > system) return { kind:"vendor", confidence:conf, why: why.join(", ") };
+  if(system > vendor) return { kind:"equipment", confidence:conf, why: why.join(", ") };
+
+  // Nothing structured on either side. Prose that reads like reference is a
+  // note; anything else is too weak to call and goes to the model.
+  if(RX_NOTEISH.test(title)) return { kind:"note", confidence:"medium", why:"reads as reference" };
+  return { kind:"note", confidence:"low", why:"nothing decisive" };
+}
+
 const KIND_VIEWS = {
   systems: { kinds:["equipment","unsorted"], glyph:"{}",
              empty:"No systems yet",
@@ -3188,6 +3270,7 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, on
   const [installer, setInstaller] = useState(s.installer || "");
   // Imported Trello cards are this equipment's history. Rather than fold them
   // into one blob, keep them as their own notes and hang them off the record.
+  const [kind, setKind] = useState(s.kind || presetKind || "");
   const [linkedIds, setLinkedIds] = useState(s.linkedIds || []);
   const [linking, setLinking] = useState(false);
   const [linkQ, setLinkQ] = useState("");
@@ -3236,7 +3319,8 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, on
       ...s,
       id: s.id || uid(), home_id: s.home_id || homeId,
       title: t, section: section.trim(), notes: notes.trim(),
-      kind: s.kind || presetKind || null,
+      kind: kind || (classifyEntry({ title, notes, equipment: eq }).kind === 'mixed'
+        ? 'equipment' : classifyEntry({ title, notes, equipment: eq }).kind),
       equipment: Object.keys(clean).length ? clean : null,
       installer: installer.trim(), photo: photo || null,
       linkedIds: linkedIds.length ? linkedIds : null,
@@ -3266,6 +3350,29 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, on
         <input className="input" value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. HVAC - north side, Main House" />
         <label className="field-label">Section</label>
         <input className="input" value={section} onChange={e=>setSection(e.target.value)} placeholder="e.g. HVAC Systems" />
+
+        {/* Classify at capture, not in a batch later: show what this looks like
+            and let it be corrected in one tap. Never assigned silently. */}
+        {(() => {
+          const guess = classifyEntry({ title, notes, equipment: eq });
+          const current = kind || (guess.kind === "mixed" ? "equipment" : guess.kind);
+          const opts = [["equipment","System"],["vendor","Vendor"],["note","Note"]];
+          return (
+            <>
+              <div className="field-label" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+                <span>This is a</span>
+                {!kind && title.trim() && guess.why &&
+                  <span style={{fontSize:11, color:"var(--ink-3)", fontWeight:400, textTransform:"none", letterSpacing:0}}>
+                    {guess.kind === "mixed" ? "looks like two records" : "guessed: " + guess.why}
+                  </span>}
+              </div>
+              <div className="pills">
+                {opts.map(([k,label]) =>
+                  <button key={k} className={"pill "+(current===k?"on":"")} onClick={()=>setKind(k)}>{label}</button>)}
+              </div>
+            </>
+          );
+        })()}
 
         <div className="field-label" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
           <span>Equipment</span>
@@ -4561,26 +4668,46 @@ function App(){
   const runOrganise = async (home) => {
     const mine = (store.data.systems||[]).filter(x => x.home_id === home.id);
     if(!mine.length){ showToast("Nothing to organise yet."); return; }
-    setDocBusy("Reading " + mine.length + " entries...");
-    try{
-      const payload = mine.map(x => ({ id:x.id, title:x.title||"", section:x.section||"",
-                                       notes:String(x.notes||"").slice(0,400) }));
-      const res = await organiseSystems(payload);
-      const byId = {}; mine.forEach(x => { byId[x.id] = x; });
-      const rows = (res.entries||[]).map(r => {
-        const cur = byId[r.id]; if(!cur) return null;
-        const title = r.title || cur.title;
-        const section = r.section || cur.section || "";
-        const changed = title !== cur.title || section !== (cur.section||"") || (r.kind||"note") !== (cur.kind||"");
-        return { id:r.id, was:cur.title, title, section, kind:r.kind||"note",
-                 trade:r.trade||null, phone:r.phone||null, changed };
-      }).filter(Boolean);
-      setDocBusy("");
-      if(!rows.length){ showToast("Couldn't read that list. Try again."); return; }
-      if(rows.length < mine.length)
-        showToast(rows.length + " of " + mine.length + " read - run it again for the rest");
-      setOrganise({ rows });
-    }catch(e){ setDocBusy(""); showToast(e.message || "Couldn't organise that list."); }
+    // Rules first: field presence settles most of these instantly, offline, and
+    // the same way every time. The model is for what the rules cannot call, plus
+    // titles that are carrying filler and want rewriting.
+    const FILLER = /\b(reference|details|info|overview|misc|general)\b/i;
+    const judged = mine.map(x => ({ x, r: classifyEntry(x) }));
+    const needsModel = judged.filter(({x, r}) =>
+      r.confidence === "low" || r.kind === "mixed" || FILLER.test(x.title||"") || (x.title||"").length > 46);
+
+    let ai = {};
+    if(needsModel.length){
+      setDocBusy("Rules sorted " + (mine.length - needsModel.length) + ", asking about " + needsModel.length + "...");
+      try{
+        const payload = needsModel.map(({x}) => ({ id:x.id, title:x.title||"", section:x.section||"",
+                                                   notes:String(x.notes||"").slice(0,400) }));
+        const res = await organiseSystems(payload);
+        (res.entries||[]).forEach(r => { ai[r.id] = r; });
+      }catch(e){
+        // The rules still stand on their own, so a failed call degrades rather
+        // than blocking the whole tidy-up.
+        showToast("Sorted locally; the AI pass failed (" + (e.message||"") + ")");
+      }
+    }
+    setDocBusy("");
+
+    const rows = judged.map(({x, r}) => {
+      const a = ai[x.id] || null;
+      const kind = a ? (a.kind || r.kind) : r.kind;
+      const title = (a && a.title) || x.title;
+      const section = (a && a.section) || x.section || "";
+      const changed = title !== x.title || section !== (x.section||"") || kind !== (x.kind||"");
+      return { id:x.id, was:x.title, title, section,
+               kind: kind === "mixed" ? "equipment" : kind,
+               needsSplit: r.kind === "mixed",
+               confidence: a ? "ai" : r.confidence,
+               why: r.kind === "mixed" ? r.why : (a ? "read by AI" : r.why),
+               trade:(a && a.trade)||null, phone:(a && a.phone)||null, changed };
+    });
+    if(!rows.length){ showToast("Nothing to organise."); return; }
+    log("ORGANISE", mine.length + " entries, " + needsModel.length + " sent to AI");
+    setOrganise({ rows, localCount: mine.length - needsModel.length, aiCount: needsModel.length });
   };
   const applyOrganise = (chosen) => {
     const pick = {}; chosen.forEach(r => { pick[r.id] = r; });
