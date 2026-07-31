@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.28.0";
+const APP_VERSION = "0.29.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.10";
+const BUILD = "2026-07-31.11";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1853,10 +1853,7 @@ function EventSheet({ event, draft, homeId, systems, onSave, onDelete, onClose }
         {systems && systems.length > 0 &&
           <div className="field">
             <label className="label">Which system</label>
-            <select className="select" value={systemId} onChange={e=>setSystemId(e.target.value)}>
-              <option value="">Not tied to one</option>
-              {systems.map(sy => <option key={sy.id} value={sy.id}>{sy.title}</option>)}
-            </select>
+            <SystemPicker systems={systems} value={systemId} onChange={setSystemId} placeholder="Not tied to one" />
           </div>}
 
         <div className="field">
@@ -3337,6 +3334,66 @@ function CoverageScreen({ store, home, onAdd, onEdit, onDelete }){
 /* ============================================================
    JOB SHEET - the whole incident on one screen
    ============================================================ */
+/* Picking equipment out of a long Systems & Notes list needs search, not a
+   native <select>: the list also holds vendors, contact lists and general
+   notes, so the real equipment has to be findable rather than scrolled to.
+   Inline rather than a nested sheet, which would stack scrims. */
+function SystemPicker({ systems, value, onChange, placeholder }){
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const chosen = (systems||[]).find(s => s.id === value) || null;
+  const hasGear = (s) => !!(s.equipment && (s.equipment.model || s.equipment.make || s.equipment.serial));
+  const query = q.trim().toLowerCase();
+  const matched = (systems||[]).filter(s => {
+    if(!query) return true;
+    const eq = s.equipment || {};
+    return ((s.title||"") + " " + (s.section||"") + " " + (eq.make||"") + " " + (eq.model||"") + " " + (s.notes||""))
+      .toLowerCase().includes(query);
+  }).sort((a,b) =>
+    (hasGear(b)?1:0) - (hasGear(a)?1:0) ||                       // real equipment first
+    String(a.section||"").localeCompare(String(b.section||"")) ||
+    String(a.title||"").localeCompare(String(b.title||""), undefined, {numeric:true}));
+
+  if(!open){
+    return (
+      <button className="select" style={{width:"100%", textAlign:"left", cursor:"pointer"}} onClick={()=>{ setOpen(true); setQ(""); }}>
+        {chosen ? chosen.title : (placeholder || "Not sure yet")}
+      </button>
+    );
+  }
+  return (
+    <div>
+      <input className="input" value={q} onChange={e=>setQ(e.target.value)} autoFocus
+        placeholder={"Search " + (systems||[]).length + " systems & notes"} aria-label="Search systems" />
+      <div className="list" style={{marginTop:6, maxHeight:"34vh", overflowY:"auto"}}>
+        <button className="item" onClick={()=>{ onChange(""); setOpen(false); }}>
+          <div className="item-body"><div className="item-title" style={{opacity:.7}}>Not tied to a system</div></div>
+        </button>
+        {matched.map(s => {
+          const eq = s.equipment || {};
+          const age = equipmentAge(eq.manufactureDate || eq.installedDate);
+          const spec = [eq.make, eq.model].filter(Boolean).join(" ");
+          return (
+            <button key={s.id} className="item" onClick={()=>{ onChange(s.id); setOpen(false); }}>
+              <div className="item-body">
+                <div className="item-title">{s.title}</div>
+                <div className="item-meta">
+                  {spec && <span className="chip amber">{spec}</span>}
+                  {age && <span className="chip">{age.label}</span>}
+                  {s.section && <span className="chip">{s.section}</span>}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+        {!matched.length &&
+          <div className="empty" style={{padding:"26px 18px"}}><p>Nothing matches "{q}".</p></div>}
+      </div>
+      <button className="assist-toggle" style={{marginTop:6}} onClick={()=>setOpen(false)}>Cancel</button>
+    </div>
+  );
+}
+
 function JobRow({ j, systemName, spend, onOpen, onDelete }){
   const st = jobState(j.status);
   return (
@@ -3421,10 +3478,7 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onSave, onDe
         {mySystems.length > 0 &&
           <>
             <label className="field-label">Which system</label>
-            <select className="select" value={systemId} onChange={e=>setSystemId(e.target.value)}>
-              <option value="">Not sure yet</option>
-              {mySystems.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
-            </select>
+            <SystemPicker systems={mySystems} value={systemId} onChange={setSystemId} />
           </>}
 
         {/* The repair-or-replace context, on screen while the decision is live. */}
