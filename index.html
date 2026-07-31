@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.24.0";
+const APP_VERSION = "0.25.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.2";
+const BUILD = "2026-07-31.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2711,7 +2711,12 @@ function HomeOverview({ store, home, onEdit, onGoto, onPickPhoto, onRemovePhoto 
   return (
     <div>
       <HomeHero home={home} onPick={onPickPhoto} onRemove={onRemovePhoto} />
-      <div className="hub-name">{home.name}</div>
+      <div style={{display:"flex", alignItems:"center", gap:8, justifyContent:"center"}}>
+        <div className="hub-name" style={{marginBottom:0}}>{home.name}</div>
+        <button className="icon-btn" style={{width:32, height:32, flex:"0 0 auto"}} onClick={onEdit} aria-label="Edit home name">
+          <Icon d={ICONS.edit} size={15}/>
+        </button>
+      </div>
       <div className="hub-sub">{[home.address, home.type].filter(Boolean).join(" · ") || "No address yet"}</div>
 
       <WeatherStrip home={home} />
@@ -4024,15 +4029,52 @@ function App(){
     if(!rec){ showToast("Couldn't file that document."); return; }
     await readPolicyDoc(rec);
   };
+  // A renewal date that just sits in a field is a lapse waiting to happen. Keep
+  // exactly one auto reminder per policy, ~45 days ahead, and move it when the
+  // date moves. Tagged policy_id + auto so a hand-written reminder is never touched.
+  const RENEWAL_LEAD_DAYS = 45;
+  const syncRenewalReminder = (policy) => {
+    const list = store.data.reminders || [];
+    const mine = list.find(r => r.auto && r.policy_id === policy.id);
+    if(!policy.renewal){
+      if(mine) store.saveCollection("reminders", list.filter(r => r.id !== mine.id));
+      return;
+    }
+    const d = parseDay(policy.renewal);
+    d.setDate(d.getDate() - RENEWAL_LEAD_DAYS);
+    const due = dayStr(d);
+    const title = "Decide on " + policy.provider + " renewal";
+    const notes = policy.provider + " coverage expires " + fmtDate(policy.renewal) +
+      ". Decide whether to renew while any open claims still have leverage.";
+    const now = nowISO();
+    if(mine){
+      if(mine.dueDate === due && mine.title === title) return;   // nothing moved
+      store.saveCollection("reminders", list.map(r => r.id === mine.id
+        ? {...r, title, dueDate: due, notes, updatedAt: now} : r));
+    } else {
+      store.saveCollection("reminders", [{
+        id: uid(), home_id: policy.home_id, title, category: "Other",
+        dueDate: due, repeat: false, every: 1, unit: "months",
+        notes, doneAt: null, policy_id: policy.id, auto: true, source: "policy",
+        createdAt: now, updatedAt: now,
+      }, ...list]);
+    }
+  };
   const savePolicy = (rec) => {
     const list = store.data.policies || [];
     const exists = list.some(p => p.id === rec.id);
     store.saveCollection("policies", exists ? list.map(p => p.id===rec.id ? rec : p) : [rec, ...list]);
+    syncRenewalReminder(rec);
     setPolSheet(null);
-    showToast(exists ? "Coverage updated" : "Coverage added");
+    showToast(rec.renewal
+      ? (exists ? "Coverage updated" : "Coverage added") + ", renewal reminder set"
+      : (exists ? "Coverage updated" : "Coverage added"));
   };
   const deletePolicy = (p) => {
     store.saveCollection("policies", (store.data.policies||[]).filter(x => x.id !== p.id));
+    const rem = store.data.reminders || [];
+    if(rem.some(r => r.auto && r.policy_id === p.id))
+      store.saveCollection("reminders", rem.filter(r => !(r.auto && r.policy_id === p.id)));
     setPolSheet(null);
     showToast("Coverage deleted");
   };
