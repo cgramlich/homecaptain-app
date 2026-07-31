@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.34.0";
+const APP_VERSION = "0.35.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.16";
+const BUILD = "2026-07-31.17";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1347,6 +1347,7 @@ const ICONS = {
   fridge:  ["M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z","M4 10h16","M8 6v2","M8 14v2"],
   wrenchAlert:["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"],
   shield:  ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
+  users:   ["M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z","M23 21v-2a4 4 0 0 0-3-3.87","M16 3.13a4 4 0 0 1 0 7.75"],
 };
 
 
@@ -2839,6 +2840,10 @@ function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onR
   const docs   = (store.data.documents||[]).filter(d => d.home_id === home.id);
   const events = (store.data.events||[]).filter(e => e.home_id === home.id);
   const systems= (store.data.systems||[]).filter(s => s.home_id === home.id);
+  const kindIs  = (x) => x.kind || "unsorted";
+  const equipCount  = systems.filter(x => kindIs(x) === "equipment" || kindIs(x) === "unsorted").length;
+  const vendorCount = systems.filter(x => x.kind === "vendor").length;
+  const noteCount   = systems.filter(x => x.kind === "note").length;
   const policies = (store.data.policies||[]).filter(p => p.home_id === home.id);
   const openJobs = (store.data.jobs||[]).filter(j => j.home_id === home.id && isJobOpen(j));
   const rems   = (store.data.reminders||[]).filter(r => r.home_id === home.id && !r.doneAt);
@@ -2896,8 +2901,12 @@ function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onR
         <HubCard icon={ICONS.bell} title="Reminders" onClick={()=>onGoto("remind")} sub={remSub} />
         <HubCard icon={ICONS.shield} title="Coverage" onClick={()=>onGoto("coverage")}
           sub={policies.length ? policies.map(p=>p.provider).join(", ").slice(0,42) : "Warranty & insurance"} />
-        <HubCard icon={ICONS.tool} title="Systems & Notes" onClick={()=>onGoto("systems")}
-          sub={systems.length ? systems.length + (systems.length===1?" note":" notes") : "Equipment & reference"} />
+        <HubCard icon={ICONS.tool} title="Systems" onClick={()=>onGoto("systems")}
+          sub={equipCount ? equipCount + (equipCount===1?" system":" systems") : "Equipment"} />
+        <HubCard icon={ICONS.users} title="Vendors" onClick={()=>onGoto("vendors")}
+          sub={vendorCount ? vendorCount + (vendorCount===1?" vendor":" vendors") : "Who services the place"} />
+        <HubCard icon={ICONS.doc} title="Notes" onClick={()=>onGoto("notes")}
+          sub={noteCount ? noteCount + (noteCount===1?" note":" notes") : "Reference"} />
       </div>
 
       <button className="btn btn-ghost btn-block" style={{marginTop:16}} onClick={onEdit}>
@@ -3060,12 +3069,32 @@ function OrganiseSheet({ review, onApply, onClose }){
   );
 }
 
-function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello, onOrganise }){
+// Equipment, the people who service it, and everything else are three different
+// things that happened to arrive in one Trello bucket. One component, three
+// views: an entry with no kind yet counts as unsorted and stays with Systems,
+// so nothing disappears before the tidy-up has been run.
+const KIND_VIEWS = {
+  systems: { kinds:["equipment","unsorted"], glyph:"{}",
+             empty:"No systems yet",
+             body:"The physical things: HVAC, water heaters, roof, generator, pool equipment, appliances. Scan a rating plate and the model, serial and age fill themselves in." },
+  vendors: { kinds:["vendor"], glyph:"@",
+             empty:"No vendors yet",
+             body:"The people who look after the place: who you call, what they do, and what they have done here before." },
+  notes:   { kinds:["note"], glyph:"*",
+             empty:"No notes yet",
+             body:"Everything that is neither a machine nor a person: shutoff locations, warranties, checklists, anything worth remembering." },
+};
+function kindOf(x){ return x.kind || "unsorted"; }
+
+function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTrello, onOrganise }){
   const [expanded, setExpanded] = useState({});   // closed by default, same as Docs
   const [query, setQuery] = useState("");
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
 
-  const all = (store.data.systems||[]).filter(s => s.home_id === home.id);
+  const cfg = KIND_VIEWS[view] || KIND_VIEWS.systems;
+  const mine = (store.data.systems||[]).filter(s => s.home_id === home.id);
+  const all = mine.filter(s => cfg.kinds.includes(kindOf(s)));
+  const unsorted = mine.filter(s => kindOf(s) === "unsorted").length;
   // How many logged visits each system has, so a row can say "3 service visits".
   const jobCount = {};
   (store.data.events||[]).forEach(e => {
@@ -3075,11 +3104,15 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello, o
   if(!all.length){
     return (
       <div className="empty">
-        <div className="glyph">{"{}"}</div>
-        <h3 className="title-sm">No systems or notes yet</h3>
-        <p>Keep the reference details for {home.name} here: appliances and equipment, model numbers, vendors, warranties, and general notes.</p>
+        <div className="glyph">{cfg.glyph}</div>
+        <h3 className="title-sm">{cfg.empty}</h3>
+        <p>{cfg.body}</p>
+        {mine.length > 0 &&
+          <button className="btn btn-ghost" style={{marginTop:14}} onClick={onOrganise}>
+            <Icon d={ICONS.sparkle} size={16}/> Sort my {mine.length} entries
+          </button>}
         <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
-          <Icon d={ICONS.plus} size={16}/> Add a note
+          <Icon d={ICONS.plus} size={16}/> Add one
         </button>
         <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}>
           <Icon d={ICONS.upload} size={16}/> Import a Trello board
@@ -3095,27 +3128,17 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello, o
   // Once entries carry a kind (after Organise), group by what things ARE:
   // equipment, the people who service it, then everything else. Until then,
   // fall back to the section they were imported under.
-  const anyKind = matched.some(x => x.kind);
   const byTitle = (a,b) => String(a.title||"").localeCompare(String(b.title||""), undefined, {numeric:true});
-  let groups;
-  if(anyKind){
-    groups = KIND_ORDER.map(k => [
-      KIND_META[k].label,
-      matched.filter(x => (x.kind || "note") === k).sort((a,b) =>
-        String(a.section||"").localeCompare(String(b.section||"")) || byTitle(a,b))
-    ]).filter(g => g[1].length);
-  } else {
-    const sections = [];
-    matched.forEach(s => { const k = s.section || "General"; if(!sections.includes(k)) sections.push(k); });
-    sections.sort((a,b) => a==="General" ? 1 : b==="General" ? -1 : a.localeCompare(b));
-    groups = sections.map(k => [k, matched.filter(s => (s.section||"General") === k).sort(byTitle)]);
-  }
+  const sections = [];
+  matched.forEach(s => { const k = s.section || "General"; if(!sections.includes(k)) sections.push(k); });
+  sections.sort((a,b) => a==="General" ? 1 : b==="General" ? -1 : a.localeCompare(b));
+  const groups = sections.map(k => [k, matched.filter(s => (s.section||"General") === k).sort(byTitle)]);
 
   return (
     <div>
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
         <div className="log-summary">
-          {q ? matched.length + " of " + all.length + " match" : all.length + (all.length===1?" note":" notes")}
+          {q ? matched.length + " of " + all.length + " match" : all.length + (all.length===1?" entry":" entries")}
         </div>
         <div style={{display:"flex", gap:12}}>
           <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onOrganise}>Organise</button>
@@ -3123,9 +3146,14 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello, o
         </div>
       </div>
 
+      {unsorted > 0 &&
+        <div className="hint" style={{color:"var(--amber)", marginBottom:4}}>
+          {unsorted} {unsorted===1?"entry has":"entries have"} not been sorted into systems, vendors and notes yet. Tap Organise.
+        </div>}
+
       <div className="doc-tools">
         <input className="input" value={query} onChange={e=>setQuery(e.target.value)}
-          placeholder="Search systems & notes" aria-label="Search" />
+          placeholder="Search" aria-label="Search" />
       </div>
 
       {!groups.length &&
@@ -3151,7 +3179,7 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello, o
   );
 }
 
-function SystemSheet({ system, homeId, history, siblings, onSave, onDelete, onClose }){
+function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, onDelete, onClose }){
   const s = system || {};
   const [title, setTitle] = useState(s.title || "");
   const [section, setSection] = useState(s.section || "");
@@ -3208,6 +3236,7 @@ function SystemSheet({ system, homeId, history, siblings, onSave, onDelete, onCl
       ...s,
       id: s.id || uid(), home_id: s.home_id || homeId,
       title: t, section: section.trim(), notes: notes.trim(),
+      kind: s.kind || presetKind || null,
       equipment: Object.keys(clean).length ? clean : null,
       installer: installer.trim(), photo: photo || null,
       linkedIds: linkedIds.length ? linkedIds : null,
@@ -3727,7 +3756,7 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
   const setCovField = (k,v) => setCov(p => ({ ...p, [k]: v }));
 
   const moved = ownerHome !== (j.home_id || homeId);
-  const mySystems  = (systems||[]).filter(x => x.home_id === ownerHome);
+  const mySystems  = (systems||[]).filter(x => x.home_id === ownerHome && x.kind !== "vendor" && x.kind !== "note");
   const myPolicies = (policies||[]).filter(x => x.home_id === ownerHome);
   const sys = mySystems.find(s => s.id === systemId) || null;
   const eq = (sys && sys.equipment) || {};
@@ -3961,7 +3990,8 @@ const HOME_TABS = [
   { key:"log",      label:"Log",       icon:ICONS.log  },
   { key:"systems",  label:"Systems",   icon:ICONS.tool },
 ];
-const SECTION_LABELS = { overview:"Home", docs:"Docs", log:"Log", remind:"Reminders", systems:"Systems & Notes", coverage:"Coverage" };
+const SECTION_LABELS = { overview:"Home", docs:"Docs", log:"Log", remind:"Reminders",
+  systems:"Systems", vendors:"Vendors", notes:"Notes", coverage:"Coverage" };
 
 function App(){
   const store = useStore();
@@ -4857,10 +4887,12 @@ function App(){
               : tab==="coverage" ? <CoverageScreen store={store} home={activeHome}
                                      onAdd={()=>setCovChooser(true)} onEdit={(p)=>setPolSheet({policy:p})}
                                      onDelete={(p)=>{ if(confirm("Delete this coverage record?")) deletePolicy(p); }} />
-              : tab==="systems"  ? <SystemsScreen store={store} home={activeHome}
-                                     onAdd={()=>setSysSheet({system:null})} onEdit={(s)=>setSysSheet({system:s})}
+              : (tab==="systems" || tab==="vendors" || tab==="notes")
+                                 ? <SystemsScreen store={store} home={activeHome} view={tab}
+                                     onAdd={()=>setSysSheet({system:null, kind: tab==="vendors" ? "vendor" : tab==="notes" ? "note" : "equipment"})}
+                                     onEdit={(s)=>setSysSheet({system:s})}
                                      onImportTrello={pickTrello} onOrganise={()=>runOrganise(activeHome)}
-                                     onDelete={(s)=>{ if(confirm("Delete this note?")) deleteSystem(s); }} />
+                                     onDelete={(s)=>{ if(confirm("Delete this entry?")) deleteSystem(s); }} />
               :                    <RemindersScreen store={store} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
                                      onEdit={(r)=>setRemSheet({reminder:r, preset:null})}
@@ -4969,7 +5001,7 @@ function App(){
         <OrganiseSheet review={organise} onApply={applyOrganise} onClose={()=>setOrganise(null)} />}
 
       {sysSheet && activeHome &&
-        <SystemSheet system={sysSheet.system} homeId={activeHome.id}
+        <SystemSheet system={sysSheet.system} homeId={activeHome.id} presetKind={sysSheet.kind}
           siblings={(store.data.systems||[]).filter(x => x.home_id === activeHome.id)}
           history={sysSheet.system ? (store.data.events||[]).filter(e => e.system_id === sysSheet.system.id).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))) : []}
           onSave={saveSystem} onDelete={deleteSystem} onClose={()=>setSysSheet(null)} />}
