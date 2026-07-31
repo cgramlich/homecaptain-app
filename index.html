@@ -84,8 +84,13 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .app{max-width:680px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom));}
 .screen{flex:1;padding:0 18px 24px;animation:fade .35s var(--ease);}
 @keyframes fade{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+/* Solid, not a gradient: the transparent lower 40% let the list scroll through
+   the header, which read as the title overlapping the content. The fade now
+   sits BELOW the bar as its own strip. */
 .topbar{position:sticky;top:0;z-index:40;padding:calc(env(safe-area-inset-top) + 14px) 18px 12px;
-  background:linear-gradient(180deg, var(--bg) 60%, transparent);}
+  background:var(--bg);}
+.topbar::after{content:"";position:absolute;left:0;right:0;top:100%;height:14px;pointer-events:none;
+  background:linear-gradient(180deg, var(--bg), transparent);}
 .topbar-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
 .eyebrow{font-family:'Outfit';font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--amber);font-weight:600;}
 .title{font-size:30px;line-height:1.05;margin-top:2px;}
@@ -327,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.33.0";
+const APP_VERSION = "0.34.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.15";
+const BUILD = "2026-07-31.16";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -570,6 +575,25 @@ async function parseTrello(cards){
     throw new Error(detail || ("Couldn't read that board ("+r.status+")."));
   }
   return await r.json();   // { entries: [...] }
+}
+// Ask the backend to sort a home's Systems & Notes into equipment / vendors /
+// notes and propose cleaner names. Returns proposals only; nothing is applied
+// until the owner approves it.
+async function organiseSystems(entries){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/systems/organise", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ entries })
+  });
+  if(!r.ok){
+    let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
+    if(r.status===402 || r.status===429) throw new Error(detail || "AI is at its limit for now. Try again later.");
+    if(r.status===503) throw new Error(detail || "AI is temporarily unavailable.");
+    throw new Error(detail || ("Couldn't organise that list ("+r.status+")."));
+  }
+  return await r.json();
 }
 // Read a coverage document (already stored) into policy fields.
 async function parsePolicy(path){
@@ -2938,9 +2962,13 @@ function SystemRow({ s, jobs, onEdit, onDelete }){
           <div className="item-title">{s.title}</div>
           {spec ? <div style={{fontSize:12.5, color:"var(--ink-3)", marginTop:3}}>{spec}</div>
                 : (s.notes ? <div style={{fontSize:13, color:"var(--ink-3)", marginTop:3, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden"}}>{s.notes}</div> : null)}
-          {(age || jobs > 0 || (s.attachments && s.attachments.length)) &&
+          {/* !! matters: an empty attachments array makes this expression 0,
+              and React renders a literal 0 under the row. */}
+          {!!(age || s.trade || s.phone || jobs > 0 || (s.linkedIds||[]).length || (s.attachments||[]).length) &&
             <div className="item-meta">
               {age && <span className="chip amber">{age.label}</span>}
+              {s.trade && <span className="chip amber">{s.trade}</span>}
+              {s.phone && <span className="chip">{s.phone}</span>}
               {jobs > 0 && <span className="chip">{jobs} service {jobs===1?"visit":"visits"}</span>}
               {(s.linkedIds && s.linkedIds.length) ? <span className="chip">{s.linkedIds.length} linked note{s.linkedIds.length===1?"":"s"}</span> : null}
               {(s.attachments && s.attachments.length) ?
@@ -2955,7 +2983,84 @@ function SystemRow({ s, jobs, onEdit, onDelete }){
   );
 }
 
-function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello }){
+const KIND_META = {
+  equipment: { label:"Equipment",        hint:"things in the house" },
+  vendor:    { label:"Vendors & people", hint:"who services it" },
+  note:      { label:"Reference notes",  hint:"everything else" },
+};
+const KIND_ORDER = ["equipment", "vendor", "note"];
+
+/* Review the tidy-up before it happens. Each row shows what changes, and
+   anything left unticked is simply not touched. */
+function OrganiseSheet({ review, onApply, onClose }){
+  const rows = review.rows || [];
+  const [sel, setSel] = useState(() => rows.filter(r => r.changed).map(r => r.id));
+  const toggle = (id) => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const chosen = rows.filter(r => sel.includes(r.id));
+  const changed = rows.filter(r => r.changed);
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Organise</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <div className="hint" style={{marginBottom:10}}>
+          {rows.length} entries read. {changed.length} would change. Nothing is deleted or merged, only
+          renamed and re-sorted, and whatever you untick is left exactly as it is.
+        </div>
+        <div style={{display:"flex", gap:12, marginBottom:8}}>
+          <button className="assist-toggle" onClick={()=>setSel(changed.map(r=>r.id))}>All changes</button>
+          <button className="assist-toggle" onClick={()=>setSel([])}>None</button>
+        </div>
+        <div className="list" style={{maxHeight:"46vh", overflowY:"auto", marginTop:0}}>
+          {KIND_ORDER.map(k => {
+            const inKind = rows.filter(r => r.kind === k);
+            if(!inKind.length) return null;
+            return (
+              <div key={k}>
+                <div className="doc-group" style={{cursor:"default"}}>
+                  <span className="doc-group-title">{KIND_META[k].label}</span>
+                  <span className="doc-group-count">{inKind.length}</span>
+                  <span style={{fontSize:11.5, color:"var(--ink-3)", marginLeft:8}}>{KIND_META[k].hint}</span>
+                </div>
+                {inKind.map(r => {
+                  const on = sel.includes(r.id);
+                  return (
+                    <button key={r.id} className={"item"+(on?"":" muted")} onClick={()=>toggle(r.id)} disabled={!r.changed}>
+                      <span className="rem-done" style={on?{background:"var(--amber-dim)",color:"var(--amber)",borderColor:"var(--amber-line)"}:{}}>
+                        <Icon d={on?ICONS.check:ICONS.plus} size={15}/>
+                      </span>
+                      <div className="item-body">
+                        <div className="item-title">{r.title}</div>
+                        {r.title !== r.was &&
+                          <div style={{fontSize:12, color:"var(--ink-3)", marginTop:3}}>was &ldquo;{r.was}&rdquo;</div>}
+                        <div className="item-meta">
+                          {r.section && <span className="chip">{r.section}</span>}
+                          {r.trade && <span className="chip amber">{r.trade}</span>}
+                          {r.phone && <span className="chip">{r.phone}</span>}
+                          {!r.changed && <span className="chip">already fine</span>}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+        <button className="btn btn-primary btn-block" style={{marginTop:12}} disabled={!chosen.length}
+          onClick={()=>onApply(chosen)}>
+          Apply {chosen.length} {chosen.length===1?"change":"changes"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello, onOrganise }){
   const [expanded, setExpanded] = useState({});   // closed by default, same as Docs
   const [query, setQuery] = useState("");
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
@@ -2987,12 +3092,24 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello })
   const matched = q ? all.filter(s =>
     (s.title||"").toLowerCase().includes(q) || (s.notes||"").toLowerCase().includes(q) || (s.section||"").toLowerCase().includes(q)) : all;
 
-  // Group by section (Trello list name), "General" last for un-sectioned notes.
-  const sections = [];
-  matched.forEach(s => { const k = s.section || "General"; if(!sections.includes(k)) sections.push(k); });
-  sections.sort((a,b) => a==="General" ? 1 : b==="General" ? -1 : a.localeCompare(b));
-  const groups = sections.map(k => [k, matched.filter(s => (s.section||"General") === k)
-    .sort((a,b)=> String(a.title||"").localeCompare(String(b.title||""), undefined, {numeric:true}))]);
+  // Once entries carry a kind (after Organise), group by what things ARE:
+  // equipment, the people who service it, then everything else. Until then,
+  // fall back to the section they were imported under.
+  const anyKind = matched.some(x => x.kind);
+  const byTitle = (a,b) => String(a.title||"").localeCompare(String(b.title||""), undefined, {numeric:true});
+  let groups;
+  if(anyKind){
+    groups = KIND_ORDER.map(k => [
+      KIND_META[k].label,
+      matched.filter(x => (x.kind || "note") === k).sort((a,b) =>
+        String(a.section||"").localeCompare(String(b.section||"")) || byTitle(a,b))
+    ]).filter(g => g[1].length);
+  } else {
+    const sections = [];
+    matched.forEach(s => { const k = s.section || "General"; if(!sections.includes(k)) sections.push(k); });
+    sections.sort((a,b) => a==="General" ? 1 : b==="General" ? -1 : a.localeCompare(b));
+    groups = sections.map(k => [k, matched.filter(s => (s.section||"General") === k).sort(byTitle)]);
+  }
 
   return (
     <div>
@@ -3000,7 +3117,10 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello })
         <div className="log-summary">
           {q ? matched.length + " of " + all.length + " match" : all.length + (all.length===1?" note":" notes")}
         </div>
-        <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
+        <div style={{display:"flex", gap:12}}>
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onOrganise}>Organise</button>
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
+        </div>
       </div>
 
       <div className="doc-tools">
@@ -3854,6 +3974,7 @@ function App(){
   const [remSheet, setRemSheet] = useState(null);       // null | {reminder, preset}
   const [docSheet, setDocSheet] = useState(null);       // null | {doc}
   const [sysSheet, setSysSheet] = useState(null);       // null | {system}
+  const [organise, setOrganise] = useState(null);       // null | {rows}
   const [jobSheet, setJobSheet] = useState(null);       // null | {job}
   const [polSheet, setPolSheet] = useState(null);       // null | {policy, prefill, sourceDoc}
   const [covChooser, setCovChooser] = useState(false);
@@ -4406,6 +4527,47 @@ function App(){
     showToast("Coverage deleted");
   };
 
+  // ---- organise: sort the imported pile into equipment / vendors / notes ----
+  const runOrganise = async (home) => {
+    const mine = (store.data.systems||[]).filter(x => x.home_id === home.id);
+    if(!mine.length){ showToast("Nothing to organise yet."); return; }
+    setDocBusy("Reading " + mine.length + " entries...");
+    try{
+      const payload = mine.map(x => ({ id:x.id, title:x.title||"", section:x.section||"",
+                                       notes:String(x.notes||"").slice(0,400) }));
+      const res = await organiseSystems(payload);
+      const byId = {}; mine.forEach(x => { byId[x.id] = x; });
+      const rows = (res.entries||[]).map(r => {
+        const cur = byId[r.id]; if(!cur) return null;
+        const title = r.title || cur.title;
+        const section = r.section || cur.section || "";
+        const changed = title !== cur.title || section !== (cur.section||"") || (r.kind||"note") !== (cur.kind||"");
+        return { id:r.id, was:cur.title, title, section, kind:r.kind||"note",
+                 trade:r.trade||null, phone:r.phone||null, changed };
+      }).filter(Boolean);
+      setDocBusy("");
+      if(!rows.length){ showToast("Couldn't read that list. Try again."); return; }
+      if(rows.length < mine.length)
+        showToast(rows.length + " of " + mine.length + " read - run it again for the rest");
+      setOrganise({ rows });
+    }catch(e){ setDocBusy(""); showToast(e.message || "Couldn't organise that list."); }
+  };
+  const applyOrganise = (chosen) => {
+    const pick = {}; chosen.forEach(r => { pick[r.id] = r; });
+    const now = nowISO();
+    store.saveCollection("systems", (store.data.systems||[]).map(x => {
+      const r = pick[x.id];
+      if(!r) return x;
+      // Rename and reclassify only. Notes, equipment, photos and links are
+      // untouched - this is a tidy-up, not a rewrite.
+      return { ...x, title:r.title, section:r.section, kind:r.kind,
+               trade:r.trade || x.trade || null, phone:r.phone || x.phone || null,
+               updatedAt:now };
+    }));
+    setOrganise(null);
+    showToast("Organised " + chosen.length + " entr" + (chosen.length===1?"y":"ies"));
+  };
+
   // ---- systems & notes ----
   // Create a bare system inline (from a picker) and hand back its id, so an
   // issue can attach to equipment that did not exist a second ago.
@@ -4697,7 +4859,7 @@ function App(){
                                      onDelete={(p)=>{ if(confirm("Delete this coverage record?")) deletePolicy(p); }} />
               : tab==="systems"  ? <SystemsScreen store={store} home={activeHome}
                                      onAdd={()=>setSysSheet({system:null})} onEdit={(s)=>setSysSheet({system:s})}
-                                     onImportTrello={pickTrello}
+                                     onImportTrello={pickTrello} onOrganise={()=>runOrganise(activeHome)}
                                      onDelete={(s)=>{ if(confirm("Delete this note?")) deleteSystem(s); }} />
               :                    <RemindersScreen store={store} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
@@ -4802,6 +4964,9 @@ function App(){
         <PolicySheet policy={polSheet.policy} homeId={activeHome.id}
           prefill={polSheet.prefill} sourceDoc={polSheet.sourceDoc}
           onSave={savePolicy} onDelete={deletePolicy} onClose={()=>setPolSheet(null)} />}
+
+      {organise && activeHome &&
+        <OrganiseSheet review={organise} onApply={applyOrganise} onClose={()=>setOrganise(null)} />}
 
       {sysSheet && activeHome &&
         <SystemSheet system={sysSheet.system} homeId={activeHome.id}
