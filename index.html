@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.25.1";
+const APP_VERSION = "0.25.2";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.4";
+const BUILD = "2026-07-31.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2373,10 +2373,10 @@ function DocRow({ d, onEdit, onOpen, onDelete }){
 
 function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort, onDelete }){
   // Hooks first (before any early return) so the count stays constant.
-  const [collapsed, setCollapsed] = useState({});
+  const [expanded, setExpanded] = useState({});   // closed by default: the group list IS the index
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("date-desc");
-  const toggle = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+  const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
 
   const all = (store.data.documents||[]).filter(d => d.home_id === home.id);
 
@@ -2444,7 +2444,7 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort, onDelete }){
         </div>}
 
       {groups.map(g => {
-        const open = q ? true : !collapsed[g[0]];   // searching force-expands
+        const open = q ? true : (groups.length === 1 ? true : !!expanded[g[0]]);   // search or a lone group force-expands
         return (
           <div key={g[0]}>
             <button className="doc-group" onClick={()=>toggle(g[0])} aria-expanded={open}>
@@ -2817,9 +2817,9 @@ function SystemRow({ s, jobs, onEdit, onDelete }){
 }
 
 function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello }){
-  const [collapsed, setCollapsed] = useState({});
+  const [expanded, setExpanded] = useState({});   // closed by default, same as Docs
   const [query, setQuery] = useState("");
-  const toggle = (k) => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+  const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
 
   const all = (store.data.systems||[]).filter(s => s.home_id === home.id);
   // How many logged visits each system has, so a row can say "3 service visits".
@@ -2873,7 +2873,7 @@ function SystemsScreen({ store, home, onAdd, onEdit, onDelete, onImportTrello })
         <div className="empty" style={{padding:"40px 20px"}}><p>Nothing matches "{query}".</p></div>}
 
       {groups.map(g => {
-        const open = q ? true : !collapsed[g[0]];
+        const open = q ? true : (groups.length === 1 ? true : !!expanded[g[0]]);
         return (
           <div key={g[0]}>
             <button className="doc-group" onClick={()=>toggle(g[0])} aria-expanded={open}>
