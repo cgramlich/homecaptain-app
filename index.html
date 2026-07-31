@@ -320,9 +320,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.25.0";
+const APP_VERSION = "0.25.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.3";
+const BUILD = "2026-07-31.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2149,7 +2149,7 @@ function AddSheet({ onLog, onReminder, onDocs, onNote, onTrello, onIssue, onClos
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <div style={{display:"flex", flexDirection:"column", gap:10}}>
-          <button className="btn btn-ghost btn-block" onClick={onIssue}><Icon d={ICONS.wrenchAlert} size={17}/> Something broke</button>
+          <button className="btn btn-ghost btn-block" onClick={onIssue}><Icon d={ICONS.tool} size={17}/> Report something broken</button>
           <button className="btn btn-ghost btn-block" onClick={onLog}><Icon d={ICONS.log} size={17}/> Log entry</button>
           <button className="btn btn-ghost btn-block" onClick={onReminder}><Icon d={ICONS.bell} size={17}/> Reminder</button>
           <button className="btn btn-ghost btn-block" onClick={onDocs}><Icon d={ICONS.doc} size={17}/> Documents</button>
@@ -2419,7 +2419,10 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort, onDelete }){
         <div className="log-summary">
           {q ? shown + " of " + all.length + " match" : all.length + (all.length===1?" document":" documents") + (total>0 ? " · " + humanSize(total) : "")}
         </div>
-        <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onResort}>Re-sort by name</button>
+        <div style={{display:"flex", gap:12}}>
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onResort}>Re-sort by name</button>
+        </div>
       </div>
 
       <div className="doc-tools">
