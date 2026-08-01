@@ -291,6 +291,15 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
   padding:8px 18px calc(24px + env(safe-area-inset-bottom));}
 @keyframes slideup{from{transform:translateY(100%);}to{transform:none;}}
 .sheet-grip{width:38px;height:4px;border-radius:999px;background:var(--line-2);margin:8px auto 14px;}
+/* Viewing a home someone shared with you. The sheets still open, because the
+   detail IS the point of sharing, but nothing in them can be changed: primary
+   and destructive actions are removed and the fields read as frozen rather
+   than pretending to accept input. One rule on the app root covers every
+   sheet, so a sheet added later is read-only by default instead of by
+   remembering. The write path is blocked in App regardless of any of this. */
+.app.view-only .sheet input,.app.view-only .sheet textarea,.app.view-only .sheet select,
+.app.view-only .sheet .pill{pointer-events:none;opacity:.72;}
+.app.view-only .sheet .btn-primary,.app.view-only .sheet .btn-danger{display:none;}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;}
 .sheet-title{font-size:21px;margin-bottom:0;}
 .sheet-x{flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:var(--bg-3);border:1px solid var(--line-2);
@@ -332,7 +341,7 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useContext, createContext } = React;
 
 /* ============================================================
    LOGGING - module-level ring buffer, ASCII-only bracketed tags.
@@ -342,9 +351,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.43.3";
+const APP_VERSION = "0.44.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-08-01.1";
+const BUILD = "2026-08-01.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -402,6 +411,9 @@ const lsDel = (k) => { try { localStorage.removeItem(NS+k); } catch(e){} };
 
 // One per-record JSONB collection per entity (mirrors the backend COLLECTIONS).
 const FILES = ["homes","events","documents","reminders","systems","jobs","policies"];
+// Collections the backend will serve for a home shared WITH you. Deliberately
+// NOT "homes" - the shared home record arrives from /api/shared/homes already.
+const SHARED_FILES = ["events","documents","reminders","systems","jobs","policies"];
 
 /* ============================================================
    BACKEND + AUTH CONFIG
@@ -494,6 +506,66 @@ async function metaPut(obj){
   });
   if(!r.ok){ if(r.status===401) throw new Error("Session expired - sign in again."); throw new Error("Save failed ("+r.status+")"); }
   return true;
+}
+
+/* ============================================================
+   HOME SHARING API (per-home, VIEW-ONLY)
+   Owner side:  POST/GET/DELETE /api/homes/{id}/shares
+   Sharee side: GET /api/shared/homes
+                GET /api/shared/{id}/collection/{name}
+                GET /api/shared/{id}/file?path=
+   Grants are keyed by EMAIL, so a home can be shared before the recipient has
+   an account; the grant resolves when they sign in with that address. Every
+   sharee read goes through /api/shared/* - the normal collection and photo
+   endpoints are scoped to the caller's own user_id and will never return
+   someone else's rows.
+   ============================================================ */
+async function shareApi(path, opts){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + path, {
+    ...(opts||{}),
+    headers: { "Authorization":"Bearer "+token, ...((opts&&opts.body) ? {"Content-Type":"application/json"} : {}) },
+  });
+  if(!r.ok){
+    const t = await r.text();
+    log("ERROR", (opts&&opts.method||"GET")+" "+path+" "+r.status+" "+t.slice(0,140));
+    if(r.status===401) throw new Error("Session expired - sign in again.");
+    // The backend answers invites in plain language ("Enter a valid email
+    // address"), so surface its text rather than a bare status code.
+    let msg = "";
+    try{ const j = JSON.parse(t); msg = j && j.detail ? String(j.detail) : ""; }catch(_){}
+    throw new Error(msg || ("Request failed ("+r.status+")"));
+  }
+  if(r.status === 204) return null;
+  return r.json();
+}
+const listShares  = (homeId)          => shareApi("/api/homes/"+encodeURIComponent(homeId)+"/shares");
+const createShare = (homeId, email)   => shareApi("/api/homes/"+encodeURIComponent(homeId)+"/shares",
+                                          { method:"POST", body: JSON.stringify({ email }) });
+const revokeShare = (homeId, shareId) => shareApi("/api/homes/"+encodeURIComponent(homeId)+"/shares/"+encodeURIComponent(shareId),
+                                          { method:"DELETE" });
+const sharedHomesApi = ()             => shareApi("/api/shared/homes");
+const sharedCollApi  = (homeId, name) => shareApi("/api/shared/"+encodeURIComponent(homeId)+"/collection/"+encodeURIComponent(name));
+async function signSharedFile(homeId, path){
+  const j = await shareApi("/api/shared/"+encodeURIComponent(homeId)+"/file?path="+encodeURIComponent(path));
+  return j.url;
+}
+
+/* Inside a home someone shared with you, every stored file has to be signed
+   through /api/shared/{home_id}/file: the normal photo endpoint only ever signs
+   objects under YOUR OWN user id, so it would refuse the owner's file. This
+   context carries the shared home's id down to whatever renders a file, and
+   null means "these are your own files" - which is the default everywhere. */
+const ShareCtx = createContext(null);
+// True anywhere inside a home shared with us. Read by the shared row/list
+// primitives so read-only coverage doesn't depend on every screen remembering.
+const ReadOnlyCtx = createContext(false);
+function useSigner(){
+  const sharedHomeId = useContext(ShareCtx);
+  return useCallback(
+    (path) => sharedHomeId ? signSharedFile(sharedHomeId, path) : signFile(path),
+    [sharedHomeId]);
 }
 
 /* ============================================================
@@ -1150,6 +1222,15 @@ function useStore(){
   const [data, setData] = useState(() => {
     const d = {}; FILES.forEach(f => d[f] = lsGet("cache:"+f, [])); return d;
   });
+  // Homes shared WITH this account, kept in their OWN slice. Never merged into
+  // `data`: everything in `data` gets pushed back to the server under this
+  // user's id, so an owner's rows landing there would copy their home into the
+  // sharee's account on the next flush.
+  const [shared, setShared] = useState(() => {
+    const d = { homes: lsGet("scache:homes", []) };
+    SHARED_FILES.forEach(f => d[f] = lsGet("scache:"+f, []));
+    return d;
+  });
   const [dirty, setDirty] = useState(() => lsGet("dirty", {}));
   const [sync, setSync] = useState("idle");       // idle | busy | pending | error
   const [syncMsg, setSyncMsg] = useState("");
@@ -1235,6 +1316,33 @@ function useStore(){
     }catch(e){ setSync("error"); setSyncMsg(e.message||"Load failed"); log("ERROR","pullAll: "+e.message); }
   }, [pushFile]);
 
+  // Homes shared WITH this account. Read-only and owner-authoritative, so unlike
+  // pullAll there is NO never-shrink guard here: whatever the owner has right now
+  // is the truth, and a revoked share correctly disappears. Every failure is
+  // swallowed - a sharing outage (or the home_shares table not existing yet)
+  // must never break your own homes.
+  const pullShared = useCallback(async () => {
+    if(!authedRef.current) return;
+    try{
+      const homes = await sharedHomesApi();
+      const next = { homes: Array.isArray(homes) ? homes : [] };
+      SHARED_FILES.forEach(f => next[f] = []);
+      for(const h of next.homes){
+        for(const f of SHARED_FILES){
+          try{
+            const rows = await sharedCollApi(h.id, f);
+            if(Array.isArray(rows)) next[f] = next[f].concat(rows);
+          }catch(e){ log("SHARE","pull "+f+" failed for a shared home: "+(e.message||"")); }
+        }
+      }
+      setShared(next);
+      Object.keys(next).forEach(k => lsSet("scache:"+k, next[k]));
+      log("SHARE","pulled "+next.homes.length+" shared home(s)");
+    }catch(e){
+      log("SHARE","pullShared skipped: "+(e.message||""));
+    }
+  }, []);
+
   // Flush any dirty collections + config (called on online + after sign-in).
   const flush = useCallback(async () => {
     if(!authedRef.current || !navigator.onLine) return;
@@ -1271,24 +1379,29 @@ function useStore(){
       const s = data.session;
       authedRef.current = !!s;
       setAuthed(!!s); setAuthEmail(s ? (s.user.email||"") : ""); setAuthReady(true);
-      if(s){ pullAll(); }
+      if(s){ pullAll(); pullShared(); }
     });
     const { data: sub } = supa.auth.onAuthStateChange((_e, session) => {
       authedRef.current = !!session;
       setAuthed(!!session); setAuthEmail(session ? (session.user.email||"") : "");
-      if(session){ pullAll(); }
+      if(session){ pullAll(); pullShared(); }
       else {
         // Sign-out: wipe local cache so a shared device doesn't leak data.
+        // Someone else's shared home is exactly the kind of data that must not
+        // survive a sign-out, so the shared slice is cleared with the rest.
         FILES.forEach(f => { lsDel("cache:"+f); });
+        lsDel("scache:homes"); SHARED_FILES.forEach(f => { lsDel("scache:"+f); });
         lsDel("dirty"); lsDel("cfg"); lsDel("cfgDirty");
         const blank = {}; FILES.forEach(f => blank[f]=[]);
         setData(blank); dataRef.current = blank;
+        const sblank = { homes: [] }; SHARED_FILES.forEach(f => sblank[f]=[]);
+        setShared(sblank);
         setDirty({}); dirtyRef.current = {};
         setCfg(DEFAULT_CFG); cfgRef.current = DEFAULT_CFG;
       }
     });
     return () => { mounted = false; sub.subscription.unsubscribe(); };
-  }, [pullAll]);
+  }, [pullAll, pullShared]);
 
   // ---- online/offline flush ----
   useEffect(() => {
@@ -1315,14 +1428,15 @@ function useStore(){
       lastPull = now;
       await flush();
       await pullAll();
+      pullShared();
     };
     const onVis = () => { if(document.visibilityState === "visible") maybePull(); };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [flush, pullAll]);
+  }, [flush, pullAll, pullShared]);
 
-  return { data, cfg, sync, syncMsg, online, authed, authEmail, authReady,
-           saveCollection, saveCfg, pullAll, flush };
+  return { data, shared, cfg, sync, syncMsg, online, authed, authEmail, authReady,
+           saveCollection, saveCfg, pullAll, pullShared, flush };
 }
 
 /* ============================================================
@@ -1411,6 +1525,10 @@ function systemIcon(sys){
 function SwipeRow({ onDelete, children }){
   const [dx,setDx] = useState(0);
   const st = useRef(null); const moved = useRef(false);
+  // In a home shared with you there is nothing to delete. Reading this from
+  // context rather than a prop means every list is covered at once - a row
+  // added later can't quietly ship a live Delete button on someone else's data.
+  const readOnly = useContext(ReadOnlyCtx);
   // Swipe is a TOUCH gesture. On a mouse we must not engage: setPointerCapture
   // would retarget the click off the inner row so onClick never fires (a home
   // card looked "stuck" and wouldn't open on the laptop). Mouse = clean click.
@@ -1423,6 +1541,7 @@ function SwipeRow({ onDelete, children }){
   }
   function end(){ if(!st.current) return; st.current = null; setDx(d => { const nd = d <= -48 ? -84 : 0; if(nd===0) moved.current = false; return nd; }); }
   function clickCapture(e){ if(moved.current || dx !== 0){ e.stopPropagation(); e.preventDefault(); moved.current = false; setDx(0); } }
+  if(readOnly) return <div className="swipe-wrap"><div className="swipe-body">{children}</div></div>;
   return (
     <div className="swipe-wrap">
       <button className="swipe-del" onClick={(e)=>{ e.stopPropagation(); setDx(0); onDelete(); }}>
@@ -1762,7 +1881,8 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
    ============================================================ */
 function HomesScreen({ store, onAdd, onEnter, onDelete }){
   const homes = store.data.homes || [];
-  if(!homes.length){
+  const shared = (store.shared && store.shared.homes) || [];
+  if(!homes.length && !shared.length){
     return (
       <div className="empty">
         <div className="glyph">HC</div>
@@ -1775,6 +1895,7 @@ function HomesScreen({ store, onAdd, onEnter, onDelete }){
     );
   }
   return (
+    <>
     <div className="list">
       {homes.map(h => (
         <SwipeRow key={h.id} onDelete={()=>onDelete(h)}>
@@ -1800,6 +1921,137 @@ function HomesScreen({ store, onAdd, onEnter, onDelete }){
         </SwipeRow>
       ))}
     </div>
+
+    {/* Homes someone else owns and shared with you. Separated deliberately, and
+        with no swipe-to-delete: "Delete" on a home that isn't yours would be a
+        lie about what the button does. */}
+    {shared.length > 0 &&
+      <div style={{marginTop: homes.length ? 22 : 0}}>
+        <div className="label" style={{marginBottom:8}}>Shared with you</div>
+        <div className="list">
+          {shared.map(h => (
+            /* Provider so this row's thumbnail signs through the shared-file
+               endpoint - the photo belongs to the owner, not to us. */
+            <ShareCtx.Provider value={h.id} key={h.id}>
+              <button className="item" onClick={()=>onEnter(h)}>
+                {h.photo && <HomeThumb path={h.photo} />}
+                <div className="item-body">
+                  <div className="item-title">{h.name}</div>
+                  <div className="item-meta">
+                    <span className="chip">View only</span>
+                    {h._ownerEmail && <span className="chip">{h._ownerEmail}</span>}
+                    {h.address && <span className="chip">{h.address}</span>}
+                  </div>
+                </div>
+                <span className="home-card-chev"><Icon d={ICONS.chev} size={20}/></span>
+              </button>
+            </ShareCtx.Provider>
+          ))}
+        </div>
+      </div>}
+    </>
+  );
+}
+
+/* ============================================================
+   SHARING (owner side). Invite by email, see who has access, revoke.
+   Grants are VIEW-ONLY and keyed by email address, so a home can be shared
+   with someone before they have an account - the grant resolves the moment
+   they sign in with that address. Revoking takes effect on their very next
+   request; there is no cached copy on the server to expire.
+   ============================================================ */
+function ShareSheet({ home, onClose, onToast }){
+  const [list, setList] = useState(null);      // null = still loading
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = useCallback(() => {
+    listShares(home.id)
+      .then(rows => setList(Array.isArray(rows) ? rows : []))
+      .catch(e => { setList([]); setErr(e.message || "Couldn't load who this is shared with."); });
+  }, [home.id]);
+  useEffect(() => { load(); }, [load]);
+
+  const invite = async () => {
+    const addr = email.trim();
+    if(!addr || busy) return;
+    setBusy(true); setErr("");
+    try{
+      await createShare(home.id, addr);
+      setEmail("");
+      onToast("Shared with " + addr.toLowerCase());
+      load();
+    }catch(e){ setErr(e.message || "Couldn't share this home."); }
+    setBusy(false);
+  };
+
+  const revoke = async (s) => {
+    if(!confirm("Stop sharing " + home.name + " with " + s.email + "?\n\nThey lose access straight away.")) return;
+    setBusy(true); setErr("");
+    try{ await revokeShare(home.id, s.id); onToast("Access removed"); load(); }
+    catch(e){ setErr(e.message || "Couldn't remove that access."); }
+    setBusy(false);
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Share {home.name}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        {err && <div className="auth-msg err">{err}</div>}
+
+        <div className="field">
+          <label className="label">Their email address</label>
+          <div style={{display:"flex", gap:8}}>
+            <input className="input" style={{flex:"1 1 auto", minWidth:0}} type="email"
+              autoComplete="off" autoCapitalize="none" spellCheck="false"
+              value={email} onChange={e=>setEmail(e.target.value)}
+              placeholder="them@example.com"
+              onKeyDown={e=>{ if(e.key==="Enter") invite(); }} />
+            <button className="btn btn-primary" style={{flex:"0 0 auto"}} disabled={busy || !email.trim()} onClick={invite}>
+              {busy ? <span className="spin"></span> : "Share"}
+            </button>
+          </div>
+        </div>
+        <div className="hint" style={{marginTop:0}}>
+          They can look at this home only - its documents, log, reminders, systems, coverage and issues.
+          They cannot change anything, and they never see your other homes. If they do not have a
+          HomeCaptain account yet, they can sign up with this address and it will be waiting.
+        </div>
+
+        <div style={{marginTop:18}}>
+          <div className="label" style={{marginBottom:8}}>Who has access</div>
+          {list === null
+            ? <div className="hint" style={{margin:0}}><span className="spin"></span> Loading…</div>
+            : list.length === 0
+              ? <div className="hint" style={{margin:0}}>Nobody yet. This home is only visible to you.</div>
+              : (
+                <div className="list">
+                  {list.map(s => (
+                    <div className="item" key={s.id}>
+                      <div className="item-body">
+                        <div className="item-title">{s.email}</div>
+                        <div className="item-meta">
+                          <span className="chip">View only</span>
+                          {s.created_at && <span className="chip">Since {fmtDate(s.created_at)}</span>}
+                        </div>
+                      </div>
+                      <button className="btn btn-danger" style={{flex:"0 0 auto"}} disabled={busy} onClick={()=>revoke(s)}>
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -1854,7 +2106,8 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
    ============================================================ */
 function StoredImg({ path, onRemove }){
   const [url, setUrl] = useState("");
-  useEffect(() => { let ok=true; signFile(path).then(u=>{ if(ok) setUrl(u); }).catch(()=>{}); return ()=>{ ok=false; }; }, [path]);
+  const sign = useSigner();
+  useEffect(() => { let ok=true; sign(path).then(u=>{ if(ok) setUrl(u); }).catch(()=>{}); return ()=>{ ok=false; }; }, [path, sign]);
   return (
     <div className="thumb">
       {url ? <img src={url} alt="" /> : <div className="thumb-ph"><span className="spin"></span></div>}
@@ -2069,6 +2322,7 @@ function OpenIssues({ store, home, onOpenJob, onNewJob, onDeleteJob }){
 
 function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImportTrello, onClearImportedDates,
                     onOpenJob, onNewJob, onDeleteJob }){
+  const readOnly = !!store.readOnly;
   const events = (store.data.events||[])
     .filter(e => e.home_id === home.id)
     .sort((a,b)=> String(b.date||"").localeCompare(String(a.date||"")) || String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
@@ -2086,11 +2340,15 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImpor
         <div className="empty">
           <div className="glyph">+</div>
           <h3 className="title-sm">Nothing logged yet</h3>
-          <p>Log a repair, maintenance job, improvement, or inspection for {home.name} — with photos and cost.</p>
-          <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}><Icon d={ICONS.plus} size={16}/> Log an entry</button>
-          <button className="btn btn-ghost" style={{marginTop:10}} onClick={onNewJob}><Icon d={ICONS.tool} size={16}/> Report something broken</button>
-          <button className="btn btn-ghost" style={{marginTop:10}} onClick={onAddReceipt}><Icon d={ICONS.doc} size={16}/> Add from a receipt</button>
-          <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}><Icon d={ICONS.upload} size={16}/> Import from Trello</button>
+          <p>{readOnly
+            ? "Nothing has been logged for " + home.name + " yet."
+            : "Log a repair, maintenance job, improvement, or inspection for " + home.name + " — with photos and cost."}</p>
+          {!readOnly && <>
+            <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}><Icon d={ICONS.plus} size={16}/> Log an entry</button>
+            <button className="btn btn-ghost" style={{marginTop:10}} onClick={onNewJob}><Icon d={ICONS.tool} size={16}/> Report something broken</button>
+            <button className="btn btn-ghost" style={{marginTop:10}} onClick={onAddReceipt}><Icon d={ICONS.doc} size={16}/> Add from a receipt</button>
+            <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}><Icon d={ICONS.upload} size={16}/> Import from Trello</button>
+          </>}
         </div>
       </div>
     );
@@ -2101,13 +2359,14 @@ function LogScreen({ store, home, onAdd, onEdit, onDelete, onAddReceipt, onImpor
       <OpenIssues store={store} home={home} onOpenJob={onOpenJob} onNewJob={onNewJob} onDeleteJob={onDeleteJob} />
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
         <div className="log-summary">{events.length} {events.length===1?"entry":"entries"}{total>0 ? " · $"+fmtNum(total)+" total" : ""}</div>
-        <div style={{display:"flex", gap:12}}>
-          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onNewJob}>Something broke</button>
-          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAddReceipt}>Add receipt</button>
-          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onImportTrello}>Import Trello</button>
-        </div>
+        {!readOnly &&
+          <div style={{display:"flex", gap:12}}>
+            <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onNewJob}>Something broke</button>
+            <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAddReceipt}>Add receipt</button>
+            <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onImportTrello}>Import Trello</button>
+          </div>}
       </div>
-      {misdated.length > 0 &&
+      {!readOnly && misdated.length > 0 &&
         <div className="hint" style={{marginBottom:6}}>
           {misdated.length} imported {misdated.length===1?"entry":"entries"} got today's date because the source card had none.{" "}
           <button className="assist-toggle" style={{marginTop:0}}
@@ -2237,6 +2496,7 @@ function ReminderSheet({ reminder, preset, homeId, onSave, onDelete, onClose }){
 }
 
 function ReminderRow({ r, onEdit, onComplete, onDelete }){
+  const readOnly = useContext(ReadOnlyCtx);
   const st = remStatus(r);
   const n = daysUntil(r.dueDate);
   const due =
@@ -2258,16 +2518,19 @@ function ReminderRow({ r, onEdit, onComplete, onDelete }){
             {rep && <span className="chip">{rep}</span>}
           </div>
         </button>
-        <button className="rem-done" onClick={()=>onComplete(r)}
-          aria-label={st==="done" ? "Reopen reminder" : "Mark done"}>
-          <Icon d={st==="done" ? ICONS.undo : ICONS.check} size={17}/>
-        </button>
+        {/* Ticking someone else's reminder off would be a write. */}
+        {!readOnly &&
+          <button className="rem-done" onClick={()=>onComplete(r)}
+            aria-label={st==="done" ? "Reopen reminder" : "Mark done"}>
+            <Icon d={st==="done" ? ICONS.undo : ICONS.check} size={17}/>
+          </button>}
       </div>
     </SwipeRow>
   );
 }
 
 function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete, onClearImportedDates }){
+  const readOnly = !!store.readOnly;
   const all = (store.data.reminders||[]).filter(r => r.home_id === home.id);
   // Reminders imported before v0.19.0 were stamped with the import date because
   // there was no "undated" state. Spot them (source trello + due date == the day
@@ -2280,14 +2543,18 @@ function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete, onC
       <div className="empty">
         <div className="glyph">!</div>
         <h3 className="title-sm">Nothing scheduled yet</h3>
-        <p>Stay ahead of the work at {home.name}. Tap a common one to start, or add your own.</p>
-        <div className="pills" style={{justifyContent:"center", marginTop:18}}>
-          {REMINDER_PRESETS.map(p =>
-            <button key={p.title} className="pill" onClick={()=>onAdd(p)}>{p.title}</button>)}
-        </div>
-        <button className="btn btn-primary" style={{marginTop:18}} onClick={()=>onAdd(null)}>
-          <Icon d={ICONS.plus} size={16}/> Add a reminder
-        </button>
+        <p>{readOnly
+          ? "No reminders have been set up for " + home.name + " yet."
+          : "Stay ahead of the work at " + home.name + ". Tap a common one to start, or add your own."}</p>
+        {!readOnly && <>
+          <div className="pills" style={{justifyContent:"center", marginTop:18}}>
+            {REMINDER_PRESETS.map(p =>
+              <button key={p.title} className="pill" onClick={()=>onAdd(p)}>{p.title}</button>)}
+          </div>
+          <button className="btn btn-primary" style={{marginTop:18}} onClick={()=>onAdd(null)}>
+            <Icon d={ICONS.plus} size={16}/> Add a reminder
+          </button>
+        </>}
       </div>
     );
   }
@@ -2314,7 +2581,7 @@ function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete, onC
           {overdueN > 0 ? overdueN + " overdue" : "Nothing overdue"}
           {soonN > 0 ? " · " + soonN + " due soon" : ""}
         </div>
-        {misdated.length > 0 &&
+        {!readOnly && misdated.length > 0 &&
           <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}}
             onClick={()=>onClearImportedDates("reminders","dueDate",misdated)}>Clear {misdated.length} imported date{misdated.length===1?"":"s"}</button>}
       </div>
@@ -2336,11 +2603,13 @@ function RemindersScreen({ store, home, onAdd, onEdit, onComplete, onDelete, onC
 
 // Open a stored file in a new tab. The blank tab is opened SYNCHRONOUSLY inside
 // the click so Safari/iOS doesn't treat the post-await window.open as a popup.
-async function openStoredFile(path, onErr){
+// sharedHomeId set => the file belongs to a home someone shared with us, so it
+// signs through /api/shared/{id}/file instead of our own photo endpoint.
+async function openStoredFile(path, onErr, sharedHomeId){
   let w = null;
   try { w = window.open("about:blank", "_blank"); } catch(e){}
   try {
-    const url = await signFile(path);
+    const url = sharedHomeId ? await signSharedFile(sharedHomeId, path) : await signFile(path);
     if(w) w.location = url; else window.location.href = url;
   } catch(e){
     if(w) { try{ w.close(); }catch(_){ } }
@@ -2447,7 +2716,7 @@ function ImportSheet({ homes, homeId, onHome, showDropbox, singleFile, onFiles, 
   );
 }
 
-function DocSheet({ doc, homeName, onSave, onDelete, onClose, onOpen, onExtract, onApply }){
+function DocSheet({ doc, homeName, readOnly, onSave, onDelete, onClose, onOpen, onExtract, onApply }){
   const [name, setName] = useState(doc ? (doc.name||"") : "");
   const [category, setCategory] = useState(doc ? migrateDocCat(doc.category) : "Other");
   const [note, setNote] = useState(doc ? (doc.note||"") : "");
@@ -2517,7 +2786,9 @@ function DocSheet({ doc, homeName, onSave, onDelete, onClose, onOpen, onExtract,
             placeholder="Anything worth remembering about this document..." />
         </div>
 
-        {canRead &&
+        {/* Reading a document caches the result onto the record, which is a
+            write, and the server would read it against our own storage anyway. */}
+        {canRead && !readOnly &&
           <div className="field">
             <label className="label">Read with AI</label>
             {!extract &&
@@ -2590,6 +2861,7 @@ function DocRow({ d, onEdit, onOpen, onDelete }){
 }
 
 function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort, onDelete }){
+  const readOnly = !!store.readOnly;
   // Hooks first (before any early return) so the count stays constant.
   const [expanded, setExpanded] = useState({});   // closed by default: the group list IS the index
   const [query, setQuery] = useState("");
@@ -2603,10 +2875,13 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort, onDelete }){
       <div className="empty">
         <div className="glyph">[]</div>
         <h3 className="title-sm">No documents yet</h3>
-        <p>Keep everything for {home.name} in one place: the closing packet, survey, disclosures, HOA papers, warranties, and insurance. Add PDFs or photos and they sort themselves.</p>
-        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
-          <Icon d={ICONS.upload} size={16}/> Add documents
-        </button>
+        <p>{readOnly
+          ? "Nothing has been filed for " + home.name + " yet."
+          : "Keep everything for " + home.name + " in one place: the closing packet, survey, disclosures, HOA papers, warranties, and insurance. Add PDFs or photos and they sort themselves."}</p>
+        {!readOnly &&
+          <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+            <Icon d={ICONS.upload} size={16}/> Add documents
+          </button>}
       </div>
     );
   }
@@ -2637,10 +2912,11 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort, onDelete }){
         <div className="log-summary">
           {q ? shown + " of " + all.length + " match" : all.length + (all.length===1?" document":" documents") + (total>0 ? " · " + humanSize(total) : "")}
         </div>
-        <div style={{display:"flex", gap:12}}>
-          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
-          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onResort}>Re-file all</button>
-        </div>
+        {!readOnly &&
+          <div style={{display:"flex", gap:12}}>
+            <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
+            <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onResort}>Re-file all</button>
+          </div>}
       </div>
 
       <div className="doc-tools">
@@ -2811,13 +3087,17 @@ function HubCard({ icon, title, sub, onClick }){
 }
 
 // A home's photo, signed on demand. Hero on the overview; thumb on the list.
-function HomeHero({ home, onPick, onRemove }){
+function HomeHero({ home, onPick, onRemove, readOnly }){
   const [url, setUrl] = useState("");
+  const sign = useSigner();
   useEffect(() => {
     let ok = true;
-    if(home.photo){ signFile(home.photo).then(u => { if(ok) setUrl(u); }).catch(()=>{}); } else setUrl("");
+    if(home.photo){ sign(home.photo).then(u => { if(ok) setUrl(u); }).catch(()=>{}); } else setUrl("");
     return () => { ok = false; };
-  }, [home.photo]);
+  }, [home.photo, sign]);
+  // A shared home you're only viewing has no photo controls, and no empty
+  // "Add a photo" prompt inviting an action that would be refused.
+  if(!home.photo && readOnly) return null;
   if(!home.photo){
     return <button className="home-hero-add" onClick={onPick}><Icon d={ICONS.camera} size={18}/> Add a photo</button>;
   }
@@ -2825,15 +3105,16 @@ function HomeHero({ home, onPick, onRemove }){
     <div className="home-hero">
       {url ? <img src={url} alt={home.name} /> : <div className="home-hero-ph"><span className="spin"></span></div>}
       <div className="home-hero-actions">
-        <button className="home-hero-btn" onClick={onPick} aria-label="Change photo"><Icon d={ICONS.camera} size={16}/></button>
-        <button className="home-hero-btn" onClick={onRemove} aria-label="Remove photo"><Icon d={ICONS.x} size={16}/></button>
+        {!readOnly && <button className="home-hero-btn" onClick={onPick} aria-label="Change photo"><Icon d={ICONS.camera} size={16}/></button>}
+        {!readOnly && <button className="home-hero-btn" onClick={onRemove} aria-label="Remove photo"><Icon d={ICONS.x} size={16}/></button>}
       </div>
     </div>
   );
 }
 function HomeThumb({ path }){
   const [url, setUrl] = useState("");
-  useEffect(() => { let ok=true; if(path){ signFile(path).then(u=>{ if(ok) setUrl(u); }).catch(()=>{}); } return ()=>{ ok=false; }; }, [path]);
+  const sign = useSigner();
+  useEffect(() => { let ok=true; if(path){ sign(path).then(u=>{ if(ok) setUrl(u); }).catch(()=>{}); } return ()=>{ ok=false; }; }, [path, sign]);
   return <div className="home-thumb">{url ? <img src={url} alt="" /> : null}</div>;
 }
 
@@ -2910,7 +3191,8 @@ function AskBox({ store, home }){
   );
 }
 
-function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onRemovePhoto }){
+function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onRemovePhoto, onShare }){
+  const readOnly = !!store.readOnly;
   const docs   = (store.data.documents||[]).filter(d => d.home_id === home.id);
   const events = (store.data.events||[]).filter(e => e.home_id === home.id);
   const systems= (store.data.systems||[]).filter(s => s.home_id === home.id);
@@ -2940,14 +3222,22 @@ function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onR
 
   return (
     <div>
-      <HomeHero home={home} onPick={onPickPhoto} onRemove={onRemovePhoto} />
+      <HomeHero home={home} onPick={onPickPhoto} onRemove={onRemovePhoto} readOnly={readOnly} />
       <div style={{display:"flex", alignItems:"center", gap:8, justifyContent:"center"}}>
         <div className="hub-name" style={{marginBottom:0}}>{home.name}</div>
-        <button className="icon-btn" style={{width:32, height:32, flex:"0 0 auto"}} onClick={onEdit} aria-label="Edit home name">
-          <Icon d={ICONS.edit} size={15}/>
-        </button>
+        {!readOnly &&
+          <button className="icon-btn" style={{width:32, height:32, flex:"0 0 auto"}} onClick={onEdit} aria-label="Edit home name">
+            <Icon d={ICONS.edit} size={15}/>
+          </button>}
       </div>
       <div className="hub-sub">{[home.address, home.type].filter(Boolean).join(" · ") || "No address yet"}</div>
+
+      {/* Say plainly whose home this is and what you can do with it, rather than
+          leaving someone to discover it by tapping something that refuses. */}
+      {readOnly &&
+        <div className="auth-msg" style={{background:"var(--amber-dim)", border:"1px solid var(--amber-line)", marginTop:12}}>
+          Shared with you by {home._ownerEmail || "the owner"}. You can look through everything here, but only they can change it.
+        </div>}
 
       <WeatherStrip home={home} />
 
@@ -2966,7 +3256,10 @@ function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onR
           <span className="hub-card-chev"><Icon d={ICONS.chev} size={18}/></span>
         </button>}
 
-      <AskBox store={store} home={home} />
+      {/* Ask reads documents server-side against the CALLER's own storage, so on
+          a shared home it would silently answer without ever opening the file.
+          Better to not offer it than to offer a worse version of it. */}
+      {!readOnly && <AskBox store={store} home={home} />}
 
       {chips.length>0 && <div className="facts">{chips}</div>}
 
@@ -2986,9 +3279,15 @@ function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onR
           sub={noteCount ? noteCount + (noteCount===1?" note":" notes") : "Reference"} />
       </div>
 
-      <button className="btn btn-ghost btn-block" style={{marginTop:16}} onClick={onEdit}>
-        <Icon d={ICONS.edit} size={16}/> Edit home details
-      </button>
+      {!readOnly &&
+        <>
+          <button className="btn btn-ghost btn-block" style={{marginTop:16}} onClick={onEdit}>
+            <Icon d={ICONS.edit} size={16}/> Edit home details
+          </button>
+          <button className="btn btn-ghost btn-block" style={{marginTop:10}} onClick={onShare}>
+            <Icon d={ICONS.users} size={16}/> Share this home
+          </button>
+        </>}
     </div>
   );
 }
@@ -3040,11 +3339,12 @@ function waitingLabels(j){
 // The unit's own photo, signed on demand. Falls back to its icon when absent.
 function SysThumb({ path }){
   const [url, setUrl] = useState("");
+  const sign = useSigner();
   useEffect(() => {
     let ok = true;
-    if(path) signFile(path).then(u => { if(ok) setUrl(u); }).catch(()=>{});
+    if(path) sign(path).then(u => { if(ok) setUrl(u); }).catch(()=>{});
     return () => { ok = false; };
-  }, [path]);
+  }, [path, sign]);
   return <span className="sys-ic" style={url ? {backgroundImage:"url("+url+")", backgroundSize:"cover", backgroundPosition:"center"} : {}} />;
 }
 
@@ -3370,6 +3670,7 @@ const KIND_VIEWS = {
 function kindOf(x){ return x.kind || "unsorted"; }
 
 function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTrello, onOrganize }){
+  const readOnly = !!store.readOnly;
   const [expanded, setExpanded] = useState({});   // closed by default, same as Docs
   const [query, setQuery] = useState("");
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
@@ -3390,16 +3691,18 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
         <div className="glyph">{cfg.glyph}</div>
         <h3 className="title-sm">{cfg.empty}</h3>
         <p>{cfg.body}</p>
-        {mine.length > 0 &&
-          <button className="btn btn-ghost" style={{marginTop:14}} onClick={onOrganize}>
-            <Icon d={ICONS.sparkle} size={16}/> Sort my {mine.length} entries
-          </button>}
-        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
-          <Icon d={ICONS.plus} size={16}/> Add one
-        </button>
-        <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}>
-          <Icon d={ICONS.upload} size={16}/> Import a Trello board
-        </button>
+        {!readOnly && <>
+          {mine.length > 0 &&
+            <button className="btn btn-ghost" style={{marginTop:14}} onClick={onOrganize}>
+              <Icon d={ICONS.sparkle} size={16}/> Sort my {mine.length} entries
+            </button>}
+          <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+            <Icon d={ICONS.plus} size={16}/> Add one
+          </button>
+          <button className="btn btn-ghost" style={{marginTop:10}} onClick={onImportTrello}>
+            <Icon d={ICONS.upload} size={16}/> Import a Trello board
+          </button>
+        </>}
       </div>
     );
   }
@@ -3423,13 +3726,14 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
         <div className="log-summary">
           {q ? matched.length + " of " + all.length + " match" : all.length + (all.length===1?" entry":" entries")}
         </div>
-        <div style={{display:"flex", gap:12}}>
-          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onOrganize}>Organize</button>
-          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
-        </div>
+        {!readOnly &&
+          <div style={{display:"flex", gap:12}}>
+            <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onOrganize}>Organize</button>
+            <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
+          </div>}
       </div>
 
-      {unsorted > 0 &&
+      {!readOnly && unsorted > 0 &&
         <div className="hint" style={{color:"var(--amber)", marginBottom:4}}>
           {unsorted} {unsorted===1?"entry has":"entries have"} not been sorted into systems, vendors and notes yet. Tap Organize.
         </div>}
@@ -3953,16 +4257,20 @@ function DocPickerSheet({ docs, onPick, onClose }){
 }
 
 function CoverageScreen({ store, home, onAdd, onEdit, onDelete }){
+  const readOnly = !!store.readOnly;
   const all = (store.data.policies||[]).filter(p => p.home_id === home.id);
   if(!all.length){
     return (
       <div className="empty">
         <div className="glyph">◇</div>
         <h3 className="title-sm">No coverage recorded</h3>
-        <p>Home warranty, homeowners insurance, service plans. Recording them here means that when something breaks, {home.name} reminds you to file a claim before you authorize the work.</p>
-        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
-          <Icon d={ICONS.plus} size={16}/> Add coverage
-        </button>
+        <p>{readOnly
+          ? "No warranty or insurance has been recorded for " + home.name + " yet."
+          : "Home warranty, homeowners insurance, service plans. Recording them here means that when something breaks, " + home.name + " reminds you to file a claim before you authorize the work."}</p>
+        {!readOnly &&
+          <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+            <Icon d={ICONS.plus} size={16}/> Add coverage
+          </button>}
       </div>
     );
   }
@@ -3970,7 +4278,7 @@ function CoverageScreen({ store, home, onAdd, onEdit, onDelete }){
     <div>
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
         <div className="log-summary">{all.length} {all.length===1?"policy":"policies"}</div>
-        <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
+        {!readOnly && <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>}
       </div>
       <div className="list">
         {all.map(p => (
@@ -4374,6 +4682,7 @@ function App(){
   const [jobSheet, setJobSheet] = useState(null);       // null | {job}
   const [polSheet, setPolSheet] = useState(null);       // null | {policy, prefill, sourceDoc}
   const [covChooser, setCovChooser] = useState(false);
+  const [shareSheet, setShareSheet] = useState(null);   // null | the home being shared
   const [docPicker, setDocPicker] = useState(false);
   const [docBusy, setDocBusy] = useState("");           // "" | "Adding 3 of 16..."
   const [importOpen, setImportOpen] = useState(false);
@@ -4503,12 +4812,34 @@ function App(){
     setTab("overview"); setNavStack([]); setView("home");
   };
 
+  // ---- read-only guard for a home someone shared with you ----
+  // Every mutation in this app writes through saveCollection, and saveCollection
+  // pushes the whole collection back to the server under THIS user's id. So a
+  // write made while viewing someone else's home would not just fail politely,
+  // it would copy their rows into this account. The affordances are hidden in
+  // read-only mode; this is the backstop for anything that slips through.
+  // A ref rather than state, because the handlers below read it at call time.
+  const readOnlyRef = useRef(false);
+  // Which shared home is open, for the handlers that sign a file outside React
+  // context (opening a document in a new tab). null when we're in our own home.
+  const sharedHomeIdRef = useRef(null);
+  const blockedWrite = () => {
+    if(!readOnlyRef.current) return false;
+    log("SHARE","blocked a write while viewing a shared home");
+    showToast("Shared with you - view only");
+    return true;
+  };
+  const saveColl = (file, items) => {
+    if(blockedWrite()) return;
+    store.saveCollection(file, items);
+  };
+
   // ---- home CRUD handlers ----
   const saveHome = (rec) => {
     const homes = store.data.homes || [];
     const exists = homes.some(h => h.id === rec.id);
     const next = exists ? homes.map(h => h.id===rec.id ? rec : h) : [rec, ...homes];
-    store.saveCollection("homes", next);
+    saveColl("homes", next);
     if(!store.cfg.activeHomeId || !exists) store.saveCfg({ ...store.cfg, activeHomeId: rec.id });
     setSheet(null);
     showToast(exists ? "Home updated" : "Home added");
@@ -4516,7 +4847,7 @@ function App(){
   };
   const deleteHome = (id) => {
     const next = (store.data.homes||[]).filter(h => h.id !== id);
-    store.saveCollection("homes", next);
+    saveColl("homes", next);
     if(store.cfg.activeHomeId === id) store.saveCfg({ ...store.cfg, activeHomeId: next[0] ? next[0].id : null });
     setSheet(null);
     setView("houses");                                    // deleting the current home returns to the list
@@ -4528,12 +4859,12 @@ function App(){
     const events = store.data.events || [];
     const exists = events.some(e => e.id === rec.id);
     const next = exists ? events.map(e => e.id===rec.id ? rec : e) : [rec, ...events];
-    store.saveCollection("events", next);
+    saveColl("events", next);
     setEventSheet(null);
     showToast(exists ? "Entry updated" : "Logged");
   };
   const deleteEvent = (id) => {
-    store.saveCollection("events", (store.data.events||[]).filter(e => e.id !== id));
+    saveColl("events", (store.data.events||[]).filter(e => e.id !== id));
     setEventSheet(null);
     showToast("Entry deleted");
   };
@@ -4543,12 +4874,12 @@ function App(){
     const list = store.data.reminders || [];
     const exists = list.some(r => r.id === rec.id);
     const next = exists ? list.map(r => r.id===rec.id ? rec : r) : [rec, ...list];
-    store.saveCollection("reminders", next);
+    saveColl("reminders", next);
     setRemSheet(null);
     showToast(exists ? "Reminder updated" : "Reminder added");
   };
   const deleteReminder = (id) => {
-    store.saveCollection("reminders", (store.data.reminders||[]).filter(r => r.id !== id));
+    saveColl("reminders", (store.data.reminders||[]).filter(r => r.id !== id));
     setRemSheet(null);
     showToast("Reminder deleted");
   };
@@ -4606,7 +4937,7 @@ function App(){
     setDocBusy("");
     if(added.length || Object.keys(replacements).length){
       const merged = base.map(d => replacements[d.id] || d);
-      store.saveCollection("documents", [...added, ...merged]);
+      saveColl("documents", [...added, ...merged]);
       oldPathsToDelete.forEach(p => deleteFile(p));   // best-effort storage cleanup
     }
     afterImportForCoverage([...added, ...Object.values(replacements)]);
@@ -4697,7 +5028,7 @@ function App(){
       const docRec = { id: docId, home_id: homeId, name: stripExt(file.name), category: classifyDoc(file.name),
         path, size: file.size, mime: file.type || (isPdfName(file.name) ? "application/pdf" : ""),
         sourceName: file.name, note: "", createdAt: nowISO(), updatedAt: nowISO() };
-      store.saveCollection("documents", [docRec, ...(store.data.documents||[])]);
+      saveColl("documents", [docRec, ...(store.data.documents||[])]);
       let fields = {};
       try { const res = await parseReceipt(path); fields = (res && res.fields) || {}; }
       catch(e){ log("ERROR","parseReceipt: "+e.message); showToast("Saved the receipt; couldn't auto-read it - fill it in."); }
@@ -4800,9 +5131,9 @@ function App(){
         });
       }
     });
-    if(events.length)    store.saveCollection("events",    [...events,    ...(store.data.events||[])]);
-    if(reminders.length) store.saveCollection("reminders", [...reminders, ...(store.data.reminders||[])]);
-    if(systems.length)   store.saveCollection("systems",   [...systems,   ...(store.data.systems||[])]);
+    if(events.length)    saveColl("events",    [...events,    ...(store.data.events||[])]);
+    if(reminders.length) saveColl("reminders", [...reminders, ...(store.data.reminders||[])]);
+    if(systems.length)   saveColl("systems",   [...systems,   ...(store.data.systems||[])]);
     setTrelloReview(null);
     const parts = [];
     if(events.length)    parts.push(events.length + " to Log");
@@ -4820,7 +5151,7 @@ function App(){
                 "? They move to \"No date\" - nothing is deleted, and you can set real dates any time.")) return;
     const ids = new Set(list.map(r => r.id));
     const now = nowISO();
-    store.saveCollection(coll, (store.data[coll]||[])
+    saveColl(coll, (store.data[coll]||[])
       .map(r => ids.has(r.id) ? {...r, [field]:null, updatedAt:now} : r));
     showToast(list.length + " moved to \"No date\"");
   };
@@ -4842,14 +5173,14 @@ function App(){
     const list = store.data.jobs || [];
     const prev = list.find(j => j.id === rec.id) || null;
     const exists = !!prev;
-    store.saveCollection("jobs", exists ? list.map(j => j.id===rec.id ? rec : j) : [rec, ...list]);
+    saveColl("jobs", exists ? list.map(j => j.id===rec.id ? rec : j) : [rec, ...list]);
     // Moving an issue to another house takes its visits along, and drops the
     // system link, which pointed at equipment in the house it just left.
     const movedHome = exists && prev.home_id !== rec.home_id;
     if(movedHome){
       const evs = store.data.events || [];
       if(evs.some(e => e.job_id === rec.id))
-        store.saveCollection("events", evs.map(e => e.job_id === rec.id
+        saveColl("events", evs.map(e => e.job_id === rec.id
           ? { ...e, home_id: rec.home_id, system_id: null, updatedAt: nowISO() } : e));
     }
     setJobSheet(null);
@@ -4857,10 +5188,10 @@ function App(){
   };
   const deleteJob = (j) => {
     // The visits stay in the Log; they just stop belonging to an issue.
-    store.saveCollection("jobs", (store.data.jobs||[]).filter(x => x.id !== j.id));
+    saveColl("jobs", (store.data.jobs||[]).filter(x => x.id !== j.id));
     const evs = store.data.events || [];
     if(evs.some(e => e.job_id === j.id))
-      store.saveCollection("events", evs.map(e => e.job_id === j.id ? {...e, job_id:null, updatedAt:nowISO()} : e));
+      saveColl("events", evs.map(e => e.job_id === j.id ? {...e, job_id:null, updatedAt:nowISO()} : e));
     setJobSheet(null);
     showToast("Issue deleted, its log entries kept");
   };
@@ -4906,7 +5237,7 @@ function App(){
     const list = store.data.reminders || [];
     const mine = list.find(r => r.auto && r.policy_id === policy.id);
     if(!policy.renewal){
-      if(mine) store.saveCollection("reminders", list.filter(r => r.id !== mine.id));
+      if(mine) saveColl("reminders", list.filter(r => r.id !== mine.id));
       return;
     }
     const d = parseDay(policy.renewal);
@@ -4918,10 +5249,10 @@ function App(){
     const now = nowISO();
     if(mine){
       if(mine.dueDate === due && mine.title === title) return;   // nothing moved
-      store.saveCollection("reminders", list.map(r => r.id === mine.id
+      saveColl("reminders", list.map(r => r.id === mine.id
         ? {...r, title, dueDate: due, notes, updatedAt: now} : r));
     } else {
-      store.saveCollection("reminders", [{
+      saveColl("reminders", [{
         id: uid(), home_id: policy.home_id, title, category: "Other",
         dueDate: due, repeat: false, every: 1, unit: "months",
         notes, doneAt: null, policy_id: policy.id, auto: true, source: "policy",
@@ -4932,7 +5263,7 @@ function App(){
   const savePolicy = (rec) => {
     const list = store.data.policies || [];
     const exists = list.some(p => p.id === rec.id);
-    store.saveCollection("policies", exists ? list.map(p => p.id===rec.id ? rec : p) : [rec, ...list]);
+    saveColl("policies", exists ? list.map(p => p.id===rec.id ? rec : p) : [rec, ...list]);
     syncRenewalReminder(rec);
     setPolSheet(null);
     showToast(rec.renewal
@@ -4940,10 +5271,10 @@ function App(){
       : (exists ? "Coverage updated" : "Coverage added"));
   };
   const deletePolicy = (p) => {
-    store.saveCollection("policies", (store.data.policies||[]).filter(x => x.id !== p.id));
+    saveColl("policies", (store.data.policies||[]).filter(x => x.id !== p.id));
     const rem = store.data.reminders || [];
     if(rem.some(r => r.auto && r.policy_id === p.id))
-      store.saveCollection("reminders", rem.filter(r => !(r.auto && r.policy_id === p.id)));
+      saveColl("reminders", rem.filter(r => !(r.auto && r.policy_id === p.id)));
     setPolSheet(null);
     showToast("Coverage deleted");
   };
@@ -5033,15 +5364,15 @@ function App(){
                  trade:r.trade || x.trade || null, phone:r.phone || x.phone || null,
                  updatedAt:now };
       });
-    store.saveCollection("systems", next);
+    saveColl("systems", next);
     // A deleted entry must not leave an issue or a log entry pointing at nothing.
     if(gone.size){
       const evs = store.data.events || [];
       if(evs.some(e => gone.has(e.system_id)))
-        store.saveCollection("events", evs.map(e => gone.has(e.system_id) ? {...e, system_id:null, updatedAt:now} : e));
+        saveColl("events", evs.map(e => gone.has(e.system_id) ? {...e, system_id:null, updatedAt:now} : e));
       const jbs = store.data.jobs || [];
       if(jbs.some(j => gone.has(j.system_id)))
-        store.saveCollection("jobs", jbs.map(j => gone.has(j.system_id) ? {...j, system_id:null, updatedAt:now} : j));
+        saveColl("jobs", jbs.map(j => gone.has(j.system_id) ? {...j, system_id:null, updatedAt:now} : j));
     }
     setOrganize(null);
     const bits = [];
@@ -5060,7 +5391,7 @@ function App(){
     const rec = { id: uid(), home_id: forHome, title: t, section: "", notes: "",
                   equipment: null, installer: "", photo: null, linkedIds: null,
                   source: "manual", createdAt: now, updatedAt: now };
-    store.saveCollection("systems", [rec, ...(store.data.systems||[])]);
+    saveColl("systems", [rec, ...(store.data.systems||[])]);
     showToast("Added " + t + " - scan its plate in Systems & Notes");
     return rec.id;
   };
@@ -5069,18 +5400,18 @@ function App(){
   const patchSystem = (id, fields) => {
     const list = store.data.systems || [];
     if(!list.some(x => x.id === id)) return;
-    store.saveCollection("systems", list.map(x =>
+    saveColl("systems", list.map(x =>
       x.id === id ? { ...x, ...fields, updatedAt: nowISO() } : x));
   };
   const saveSystem = (rec) => {
     const list = store.data.systems || [];
     const next = list.some(s => s.id === rec.id) ? list.map(s => s.id===rec.id ? rec : s) : [rec, ...list];
-    store.saveCollection("systems", next);
+    saveColl("systems", next);
     setSysSheet(null);
     showToast(list.some(s => s.id === rec.id) ? "Note updated" : "Note added");
   };
   const deleteSystem = (s) => {
-    store.saveCollection("systems", (store.data.systems||[]).filter(x => x.id !== s.id));
+    saveColl("systems", (store.data.systems||[]).filter(x => x.id !== s.id));
     setSysSheet(null);
     showToast("Note deleted");
   };
@@ -5099,7 +5430,7 @@ function App(){
       await uploadFile(path, b64);
       const homes = store.data.homes || [];
       const old = (homes.find(h => h.id === homeId)||{}).photo;
-      store.saveCollection("homes", homes.map(h => h.id===homeId ? {...h, photo:path, updatedAt:nowISO()} : h));
+      saveColl("homes", homes.map(h => h.id===homeId ? {...h, photo:path, updatedAt:nowISO()} : h));
       if(old && old !== path) deleteFile(old);
       setDocBusy(""); showToast("Photo added");
     }catch(err){ setDocBusy(""); showToast(err.message || "Couldn't add the photo"); }
@@ -5109,7 +5440,7 @@ function App(){
     const home = homes.find(h => h.id === homeId);
     if(!home || !home.photo) return;
     const old = home.photo;
-    store.saveCollection("homes", homes.map(h => h.id===homeId ? {...h, photo:null, updatedAt:nowISO()} : h));
+    saveColl("homes", homes.map(h => h.id===homeId ? {...h, photo:null, updatedAt:nowISO()} : h));
     deleteFile(old);
     showToast("Photo removed");
   };
@@ -5143,7 +5474,7 @@ function App(){
         if(items.length===1) showToast(e.message); }
     }
     setDocBusy("");
-    if(added.length) store.saveCollection("documents", [...added, ...(store.data.documents||[])]);
+    if(added.length) saveColl("documents", [...added, ...(store.data.documents||[])]);
     afterImportForCoverage(added);
     if(added.length || items.length>1)
       showToast(added.length ? added.length + " imported" + (failed ? ", " + failed + " failed" : "") : "Import failed");
@@ -5169,17 +5500,17 @@ function App(){
   const saveDoc = (rec) => {
     const list = store.data.documents || [];
     const next = list.map(d => d.id===rec.id ? rec : d);
-    store.saveCollection("documents", next);
+    saveColl("documents", next);
     setDocSheet(null);
     showToast("Document updated");
   };
   const deleteDoc = (d) => {
-    store.saveCollection("documents", (store.data.documents||[]).filter(x => x.id !== d.id));
+    saveColl("documents", (store.data.documents||[]).filter(x => x.id !== d.id));
     if(d.path) deleteFile(d.path);
     setDocSheet(null);
     showToast("Document deleted");
   };
-  const openDoc = (d) => { openStoredFile(d.path, showToast); };
+  const openDoc = (d) => { openStoredFile(d.path, showToast, sharedHomeIdRef.current); };
   // Re-run the filename classifier over this home's documents and re-file them.
   // Fixes an older auto-sort in bulk without re-importing; overwrites categories,
   // so confirm first (it also replaces any manual re-tags).
@@ -5196,7 +5527,7 @@ function App(){
       if(cat !== d.category){ changed++; return { ...d, category: cat, updatedAt: nowISO() }; }
       return d;
     });
-    if(changed){ store.saveCollection("documents", next); showToast("Re-filed " + changed + " document" + (changed===1?"":"s")); }
+    if(changed){ saveColl("documents", next); showToast("Re-filed " + changed + " document" + (changed===1?"":"s")); }
     else showToast("Everything was already filed correctly");
   };
   // Read a document with AI, then cache the result on the doc so re-opening it
@@ -5205,7 +5536,7 @@ function App(){
     const res = await extractDocument(d.path);
     const stamped = { ...res, at: nowISO() };
     const list = store.data.documents || [];
-    store.saveCollection("documents", list.map(x => x.id===d.id ? {...x, extracted: stamped} : x));
+    saveColl("documents", list.map(x => x.id===d.id ? {...x, extracted: stamped} : x));
     return stamped;
   };
   // Merge extracted facts onto the document's home. Stores every field under its
@@ -5237,7 +5568,7 @@ function App(){
       .forEach(k => { if(fields[k]!=null && fields[k]!=="") facts[k]=fields[k]; });
     const patch = { ...home, facts, updatedAt: nowISO() };
     if(fields.closingDate && !home.purchaseDate) patch.purchaseDate = fields.closingDate;
-    store.saveCollection("homes", homes.map(h => h.id===home.id ? patch : h));
+    saveColl("homes", homes.map(h => h.id===home.id ? patch : h));
     showToast("Added to " + home.name);
   };
 
@@ -5256,7 +5587,7 @@ function App(){
         : x);
       msg = reopening ? "Reopened" : "Marked done";
     }
-    store.saveCollection("reminders", next);
+    saveColl("reminders", next);
     showToast(msg);
   };
 
@@ -5268,11 +5599,34 @@ function App(){
   }
 
   const homes = store.data.homes || [];
-  const activeHome = homes.find(h => h.id === store.cfg.activeHomeId) || null;
+  // The open home may be one of ours or one shared with us. Ours wins on an id
+  // collision, which can't happen in practice but costs nothing to be sure of.
+  const sharedHomes = (store.shared && store.shared.homes) || [];
+  const activeHome = homes.find(h => h.id === store.cfg.activeHomeId)
+                  || sharedHomes.find(h => h.id === store.cfg.activeHomeId)
+                  || null;
   const inHome = view === "home" && !!activeHome;   // guard: never "inside" a home that's gone
+  const isShared = !!(activeHome && activeHome._shared);
+  readOnlyRef.current = isShared;
+  sharedHomeIdRef.current = isShared ? activeHome.id : null;
+  // Every in-home screen reads store.data.<collection> and filters by home_id.
+  // Swapping `data` for the shared slice is therefore the whole read path: the
+  // screens need no knowledge of sharing, and they can never see our own rows
+  // and a shared home's rows at the same time. readOnly rides along so screens
+  // can hide anything that would write.
+  const viewStore = isShared
+    ? { ...store, data: store.shared, readOnly: true }
+    : store;
 
   return (
-    <div className="app">
+    /* One provider for the whole app: the sheets render outside the screen
+       area, so scoping this any tighter would leave a document opened from a
+       sheet signing against our own storage instead of the owner's. On the
+       houses list the value is null and each shared row supplies its own, so
+       our homes and theirs can sit in one list and still sign correctly. */
+    <ShareCtx.Provider value={inHome && isShared ? activeHome.id : null}>
+    <ReadOnlyCtx.Provider value={inHome && isShared}>
+    <div className={"app" + (inHome && isShared ? " view-only" : "")}>
       {update &&
         <button className="update-bar" onClick={applyUpdate}>
           <span><Icon d={ICONS.sparkle} size={15}/> Update available <b>(v{update.ver||update.build})</b></span>
@@ -5291,7 +5645,7 @@ function App(){
               <div style={{display:"flex", alignItems:"center", gap:8, minWidth:0}}>
                 <button className="backbtn" onClick={goBack} aria-label={navStack.length ? "Back" : "All homes"}><Icon d={ICONS.back} size={19}/></button>
                 <div style={{minWidth:0}}>
-                  <div className="eyebrow">{SECTION_LABELS[tab] || "Home"}</div>
+                  <div className="eyebrow">{isShared ? "Shared · " : ""}{SECTION_LABELS[tab] || "Home"}</div>
                   <h1 className="title" style={{whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{activeHome.name}</h1>
                 </div>
               </div>
@@ -5299,7 +5653,7 @@ function App(){
                 {(() => {
                   // Reminders live up here now: something due is a notification,
                   // not a place you browse to.
-                  const rem = (store.data.reminders||[]).filter(r => r.home_id === activeHome.id && !r.doneAt);
+                  const rem = (viewStore.data.reminders||[]).filter(r => r.home_id === activeHome.id && !r.doneAt);
                   const due = rem.filter(r => { const st = remStatus(r); return st === "overdue" || st === "today"; }).length;
                   return (
                     <button className={"icon-btn"+(tab==="remind"?" on":"")} onClick={()=>goTab("remind")} aria-label={due ? due + " reminders due" : "Reminders"} style={{position:"relative"}}>
@@ -5335,25 +5689,25 @@ function App(){
           ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updMsg={updMsg} update={update} onApplyUpdate={applyUpdate} />
           : inHome
             ? (
-                tab==="overview" ? <HomeOverview store={store} home={activeHome} onEdit={()=>setSheet({home:activeHome})} onGoto={goTab} onOpenJob={(j)=>setJobSheet({job:j})} onPickPhoto={()=>pickHomePhoto(activeHome.id)} onRemovePhoto={()=>removeHomePhoto(activeHome.id)} />
-              : tab==="docs"     ? <DocsScreen store={store} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} onResort={()=>resortDocs(activeHome)}
+                tab==="overview" ? <HomeOverview store={viewStore} home={activeHome} onEdit={()=>setSheet({home:activeHome})} onGoto={goTab} onOpenJob={(j)=>setJobSheet({job:j})} onPickPhoto={()=>pickHomePhoto(activeHome.id)} onRemovePhoto={()=>removeHomePhoto(activeHome.id)} onShare={()=>setShareSheet(activeHome)} />
+              : tab==="docs"     ? <DocsScreen store={viewStore} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} onResort={()=>resortDocs(activeHome)}
                                      onDelete={(d)=>{ if(confirm("Delete this document? The file is removed from storage.")) deleteDoc(d); }} />
-              : tab==="log"      ? <LogScreen store={store} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})}
+              : tab==="log"      ? <LogScreen store={viewStore} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})}
                                      onAddReceipt={pickReceipt} onImportTrello={pickTrello}
                                      onClearImportedDates={clearImportedDates}
                                      onOpenJob={(j)=>setJobSheet({job:j})} onNewJob={()=>setJobSheet({job:null})}
                                      onDeleteJob={(j)=>{ if(confirm("Delete this issue? Its log entries are kept.")) deleteJob(j); }}
                                      onDelete={(e)=>{ if(confirm("Delete this log entry?")) deleteEvent(e.id); }} />
-              : tab==="coverage" ? <CoverageScreen store={store} home={activeHome}
+              : tab==="coverage" ? <CoverageScreen store={viewStore} home={activeHome}
                                      onAdd={()=>setCovChooser(true)} onEdit={(p)=>setPolSheet({policy:p})}
                                      onDelete={(p)=>{ if(confirm("Delete this coverage record?")) deletePolicy(p); }} />
               : (tab==="systems" || tab==="vendors" || tab==="notes")
-                                 ? <SystemsScreen store={store} home={activeHome} view={tab}
+                                 ? <SystemsScreen store={viewStore} home={activeHome} view={tab}
                                      onAdd={()=>setSysSheet({system:null, kind: tab==="vendors" ? "vendor" : tab==="notes" ? "note" : "equipment"})}
                                      onEdit={(s)=>setSysSheet({system:s})}
                                      onImportTrello={pickTrello} onOrganize={()=>runOrganize(activeHome)}
                                      onDelete={(s)=>{ if(confirm("Delete this entry?")) deleteSystem(s); }} />
-              :                    <RemindersScreen store={store} home={activeHome}
+              :                    <RemindersScreen store={viewStore} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
                                      onEdit={(r)=>setRemSheet({reminder:r, preset:null})}
                                      onComplete={completeReminder}
@@ -5398,9 +5752,13 @@ function App(){
               {t.label}
             </button>
           ))}
-          <button className="nav-add" onClick={()=>setAddSheet(true)} aria-label="Add">
-            <span><Icon d={ICONS.plus} size={24}/></span>
-          </button>
+          {/* Nothing to add in a home you're only viewing. The tabs keep their
+              positions either way, so the nav doesn't reshuffle under you. */}
+          {isShared
+            ? <span className="nav-add" aria-hidden="true"></span>
+            : <button className="nav-add" onClick={()=>setAddSheet(true)} aria-label="Add">
+                <span><Icon d={ICONS.plus} size={24}/></span>
+              </button>}
           {HOME_TABS.slice(2).map(t => (
             <button key={t.key} className={"nav-btn "+(tab===t.key?"on":"")} onClick={()=>goTab(t.key)}>
               <Icon d={t.icon} size={22}/>
@@ -5477,13 +5835,18 @@ function App(){
           onSave={saveReminder} onDelete={deleteReminder} onClose={()=>setRemSheet(null)} />}
 
       {docSheet &&
-        <DocSheet doc={docSheet.doc}
-          homeName={((store.data.homes||[]).find(h=>h.id===docSheet.doc.home_id)||{}).name || ""}
+        <DocSheet doc={docSheet.doc} readOnly={isShared}
+          homeName={((homes.concat(sharedHomes)).find(h=>h.id===docSheet.doc.home_id)||{}).name || ""}
           onSave={saveDoc} onDelete={deleteDoc} onOpen={openDoc}
           onExtract={extractDoc} onApply={applyDocFacts} onClose={()=>setDocSheet(null)} />}
 
+      {shareSheet &&
+        <ShareSheet home={shareSheet} onToast={showToast} onClose={()=>setShareSheet(null)} />}
+
       {toast && <div className="toast">{toast}</div>}
     </div>
+    </ReadOnlyCtx.Provider>
+    </ShareCtx.Provider>
   );
 }
 
