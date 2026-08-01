@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.37.0";
+const APP_VERSION = "0.38.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.20";
+const BUILD = "2026-07-31.21";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3064,7 +3064,13 @@ function OrganizeSheet({ review, onApply, onClose }){
   const [edits, setEdits] = useState({});                       // id -> edited title
   const [kinds, setKinds] = useState({});                       // id -> overridden kind
   const [sel, setSel] = useState(() => rows.filter(r => r.changed).map(r => r.id));
-  const [del, setDel] = useState([]);                           // ids marked redundant
+  // Duplicates arrive with a recommendation already made: keep the richest of
+  // each group, delete the rest. The keeper is protected, so a group can never
+  // be emptied by accident.
+  const dupKeep = review.dupKeep || {};
+  const keepers = new Set(Object.values(dupKeep));
+  const [del, setDel] = useState(() =>
+    (review.dupGroups || []).flat().filter(id => !keepers.has(id)));
   const toggle = (id) => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const toggleDel = (id) => setDel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
 
@@ -3077,7 +3083,11 @@ function OrganizeSheet({ review, onApply, onClose }){
   const chosen = rows.filter(r => sel.includes(r.id) && !del.includes(r.id))
     .map(r => ({ ...r, title: titleOf(r).trim() || r.title, kind: kindOfRow(r) }));
   const changed = rows.filter(r => r.changed);
-  const acceptAll = () => { setSel(rows.map(r => r.id)); setEdits({}); setKinds({}); };
+  // Accept all means accept the whole recommendation, deletions included.
+  const acceptAll = () => {
+    setSel(rows.map(r => r.id)); setEdits({}); setKinds({});
+    setDel((review.dupGroups || []).flat().filter(id => !keepers.has(id)));
+  };
 
   const KINDS = [["equipment","System"],["vendor","Vendor"],["note","Note"]];
 
@@ -3098,9 +3108,13 @@ function OrganizeSheet({ review, onApply, onClose }){
         </div>
         {dupGroups.length > 0 &&
           <div className="hint" style={{color:"var(--amber)", marginBottom:8}}>
-            {dupGroups.length} possible duplicate {dupGroups.length===1?"group":"groups"} found. Tap the bin on the copy
-            you don&rsquo;t want; the other is kept.
+            {dupGroups.length} possible duplicate {dupGroups.length===1?"group":"groups"}. The fullest entry in each is
+            marked <b>keep</b> and the copies are already marked for deletion &mdash; tap a bin to change your mind.
+            One of each group is always kept.
           </div>}
+        <div className="hint" style={{marginBottom:8}}>
+          Tick to accept a recommendation. Bin deletes the entry entirely.
+        </div>
 
         <div style={{display:"flex", gap:12, marginBottom:8, flexWrap:"wrap"}}>
           <button className="assist-toggle" onClick={acceptAll}>Accept all</button>
@@ -3143,7 +3157,8 @@ function OrganizeSheet({ review, onApply, onClose }){
                           {r.section && <span className="chip">{r.section}</span>}
                           {r.trade && <span className="chip amber">{r.trade}</span>}
                           {r.phone && <span className="chip">{r.phone}</span>}
-                          {dupOf[r.id] && <span className="chip red">duplicate {dupOf[r.id]}</span>}
+                          {dupOf[r.id] && <span className={"chip "+(keepers.has(r.id)?"green":"red")}>
+                            duplicate {dupOf[r.id]}{keepers.has(r.id) ? " · keeping" : ""}</span>}
                           {r.needsSplit && <span className="chip red">two records?</span>}
                           {r.confidence === "ai" ? <span className="chip">asked AI</span>
                             : r.confidence === "high" ? <span className="chip green">certain</span>
@@ -3151,11 +3166,12 @@ function OrganizeSheet({ review, onApply, onClose }){
                         </div>
                         {r.why && <div style={{fontSize:11.5, color:"var(--ink-3)", marginTop:3}}>{r.why}</div>}
                       </div>
-                      {dupOf[r.id] &&
-                        <button className="rem-done" style={{marginTop:2, ...(gone ? {background:"#d1735c22",color:"#e79b86",borderColor:"#d1735c55"} : {})}}
-                          onClick={()=>toggleDel(r.id)} aria-label={gone ? "Keep this one" : "Remove as redundant"}>
-                          <Icon d={gone ? ICONS.undo : ICONS.trash} size={15}/>
-                        </button>}
+                      {keepers.has(r.id)
+                        ? <span className="chip green" style={{marginTop:4, alignSelf:"flex-start"}}>keep</span>
+                        : <button className="rem-done" style={{marginTop:2, ...(gone ? {background:"#d1735c22",color:"#e79b86",borderColor:"#d1735c55"} : {})}}
+                            onClick={()=>toggleDel(r.id)} aria-label={gone ? "Keep this entry" : "Delete this entry"}>
+                            <Icon d={gone ? ICONS.undo : ICONS.trash} size={15}/>
+                          </button>}
                     </div>
                   );
                 })}
@@ -4803,8 +4819,28 @@ function App(){
     // Look for the same thing written twice, on the names as they will READ
     // after the tidy-up, so a rename that reveals a duplicate still catches it.
     const dupGroups = findDuplicates(rows.map(r => ({ id:r.id, title:r.title })));
+    // For each duplicate group, recommend keeping the entry that carries the
+    // most: a nameplate, a photo, attached notes, the longest description. The
+    // keeper can never be deleted, so a group can never be wiped out entirely.
+    const byId = {}; mine.forEach(x => { byId[x.id] = x; });
+    const richness = (x) => {
+      if(!x) return -1;
+      const eq = x.equipment || {};
+      return (eq.model || eq.serial || eq.make ? 40 : 0)
+           + (x.photo ? 12 : 0)
+           + ((x.linkedIds||[]).length * 6)
+           + ((x.attachments||[]).length * 3)
+           + Math.min(20, Math.round(String(x.notes||"").length / 25))
+           + (x.trade || x.phone ? 4 : 0);
+    };
+    const dupKeep = {};                    // group index -> id we keep
+    dupGroups.forEach((g, i) => {
+      let best = g[0], bestScore = richness(byId[g[0]]);
+      g.forEach(id => { const sc = richness(byId[id]); if(sc > bestScore){ best = id; bestScore = sc; } });
+      dupKeep[i] = best;
+    });
     log("ORGANIZE", mine.length + " entries, " + needsModel.length + " to AI, " + dupGroups.length + " dup groups");
-    setOrganize({ rows, dupGroups, localCount: mine.length - needsModel.length, aiCount: needsModel.length });
+    setOrganize({ rows, dupGroups, dupKeep, localCount: mine.length - needsModel.length, aiCount: needsModel.length });
   };
   const applyOrganize = (chosen, removeIds) => {
     const gone = new Set(removeIds || []);
