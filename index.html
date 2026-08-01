@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.39.0";
+const APP_VERSION = "0.40.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.22";
+const BUILD = "2026-07-31.23";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3978,7 +3978,7 @@ function JobRow({ j, systemName, spend, onOpen, onDelete }){
   );
 }
 
-function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSystem, onSave, onDelete, onLogVisit, onClose }){
+function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSystem, onSave, onDelete, onLogVisit, onLogReceipt, onClose }){
   const j = job || {};
   const [title, setTitle] = useState(j.title || "");
   const [symptom, setSymptom] = useState(j.symptom || "");
@@ -4116,6 +4116,11 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
             <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>onLogVisit(job, systemId)}>
               <Icon d={ICONS.plus} size={15}/> Log a visit or estimate
             </button>
+            {onLogReceipt &&
+              <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>onLogReceipt(job, systemId)}>
+                <Icon d={ICONS.doc} size={15}/> From an invoice or estimate
+              </button>}
+            <div className="hint">The second one reads the paperwork: it files the invoice with your documents and fills in the vendor, date and amount.</div>
           </>}
 
         <label className="field-label">Notes</label>
@@ -4252,6 +4257,7 @@ function App(){
   const docPhotoRef = useRef(null);
   const docDirRef = useRef(null);
   const receiptFileRef = useRef(null);
+  const receiptForRef = useRef(null);   // {job_id, system_id} when raised from an issue
   const trelloFileRef = useRef(null);
   const homePhotoRef = useRef(null);
   const coverageIntent = useRef(false);   // set when the import sheet was opened to add coverage
@@ -4540,10 +4546,18 @@ function App(){
   };
 
   // ---- receipt -> log entry ----
-  const pickReceipt = () => { if(receiptFileRef.current) receiptFileRef.current.click(); };
+  const pickReceipt = () => { receiptForRef.current = null; if(receiptFileRef.current) receiptFileRef.current.click(); };
+  // Same flow, raised from inside an issue: the entry it drafts belongs to that
+  // issue and its equipment, so the invoice, the log entry and the issue all
+  // land together in one pass.
+  const pickReceiptForJob = (job, systemId) => {
+    receiptForRef.current = { job_id: job.id, system_id: systemId || job.system_id || null };
+    setJobSheet(null);
+    if(receiptFileRef.current) receiptFileRef.current.click();
+  };
   // Store the receipt as a document, read it, then open a prefilled draft Log
   // entry with the receipt attached. One flow: pick a file, confirm the entry.
-  const addReceiptDraft = async (file, homeId) => {
+  const addReceiptDraft = async (file, homeId, extra) => {
     if(!file) return;
     if(file.size > DOC_MAX_BYTES){ showToast("That file is too large (20 MB max)"); return; }
     setDocBusy("Reading receipt…");
@@ -4569,15 +4583,17 @@ function App(){
         vendor: fields.vendor || "",
         notes: fields.notes || "",
         receipt: { docId, path, name: docRec.name },
+        ...(extra || {}),          // job_id / system_id when raised from an issue
       }});
     }catch(e){ setDocBusy(""); showToast(e.message || "Couldn't read that receipt"); }
   };
   const onReceiptFile = (e) => {
     const file = (e.target.files||[])[0];
     e.target.value = "";
+    const extra = receiptForRef.current; receiptForRef.current = null;
     const homes = store.data.homes || [];
     const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
-    if(file && ah) addReceiptDraft(file, ah.id);
+    if(file && ah) addReceiptDraft(file, ah.id, extra);
   };
 
   // ---- Trello board import (JSON export -> draft log entries) ----
@@ -5275,7 +5291,8 @@ function App(){
           history={jobSheet.job ? (store.data.events||[]).filter(e => e.job_id === jobSheet.job.id)
             .sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))) : []}
           onCreateSystem={createSystemQuick}
-          onSave={saveJob} onDelete={deleteJob} onLogVisit={logVisitForJob} onClose={()=>setJobSheet(null)} />}
+          onSave={saveJob} onDelete={deleteJob} onLogVisit={logVisitForJob}
+          onLogReceipt={pickReceiptForJob} onClose={()=>setJobSheet(null)} />}
 
       {covChooser && activeHome &&
         <CoverageChooser
