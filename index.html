@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.43.0";
+const APP_VERSION = "0.43.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.26";
+const BUILD = "2026-07-31.27";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -736,6 +736,19 @@ function resizeImage(file){
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not load that image.")); };
     img.src = url;
   });
+}
+
+// Shrink an image for upload, but never lose it because the browser could not
+// decode it. iPhones hand over HEIC from the library, which canvas cannot draw,
+// and the old path just failed. Fall back to the original bytes: bigger, but a
+// photo that exists beats a photo that silently didn't.
+async function imageForUpload(file){
+  try{
+    return await resizeImage(file);            // raw base64, no data-URI prefix
+  }catch(e){
+    log("PHOTO", "resize failed (" + (e && e.message) + "), uploading the original");
+    return await fileToDataURL(file);          // data URI; the backend strips it
+  }
 }
 
 // Read any file (PDF or image) as a base64 data URI, no re-encoding, so PDFs
@@ -3469,7 +3482,7 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
     for(let i = 0; i < files.length; i++){
       setScanning("Adding photo " + (i + 1) + " of " + files.length + "…");
       try{
-        const b64 = await resizeImage(files[i]);
+        const b64 = await imageForUpload(files[i]);
         const path = "systems/" + (s.id || "new") + "/photo-" + Date.now().toString(36) + "-" + i + ".jpg";
         await uploadFile(path, b64);
         added.push(path);
@@ -3496,7 +3509,7 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
     if(!file) return;
     setErr(""); setScanning("Reading the plate…");
     try{
-      const b64 = await resizeImage(file);
+      const b64 = await imageForUpload(file);
       const path = "systems/" + (s.id || "new") + "/plate-" + Date.now().toString(36) + ".jpg";
       await uploadFile(path, b64);
       const res = await readNameplate(path);
@@ -3604,12 +3617,14 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
             </label>}
         </div>
         <div className="hint">Take a photo or pick from your library. Up to {MAX_PHOTOS}.{s.id ? " Kept as soon as they upload." : ""}</div>
+        {scanning && <div className="hint" style={{color:"var(--amber)"}}>{scanning}</div>}
+        {err && <div className="hint" style={{color:"#e08a7a"}}>{err}</div>}
         <label className="btn btn-ghost btn-block" style={{cursor:"pointer", marginTop:8}}>
-          <Icon d={ICONS.camera} size={16}/> {eq.model ? "Read the label again" : "Fill this in from the unit's label"}
+          <Icon d={ICONS.camera} size={16}/> {eq.model ? "Read the label again" : "Get the model & serial from a photo"}
           <input type="file" accept="image/*" style={{display:"none"}}
             onChange={e=>{ const f=(e.target.files||[])[0]; e.target.value=""; onPlate(f); }} />
         </label>
-        <div className="hint">Nearly every unit has a metal or foil sticker with its model and serial on it, usually on the side or behind the access panel. Photograph that and the fields below fill themselves in.</div>
+        <div className="hint">Photograph the label or sticker that carries the model and serial number, and the fields below fill themselves in.</div>
         {scanning && <div className="hint" style={{color:"var(--amber)"}}>{scanning}</div>}
         {err && <div className="hint" style={{color:"#e08a7a"}}>{err}</div>}
 
@@ -5066,7 +5081,7 @@ function App(){
     if(!file || !homeId) return;
     setDocBusy("Adding photo…");
     try{
-      const b64 = await resizeImage(file);
+      const b64 = await imageForUpload(file);
       const path = "homes/" + homeId + "/" + Date.now().toString(36) + ".jpg";
       await uploadFile(path, b64);
       const homes = store.data.homes || [];
