@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.36.1";
+const APP_VERSION = "0.37.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.19";
+const BUILD = "2026-07-31.20";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2992,6 +2992,62 @@ function SystemRow({ s, jobs, onEdit, onDelete }){
   );
 }
 
+/* Redundant entries: the same thing written twice, e.g. "Propane System
+   (Buried Tank)" and "Buried propane tank". Compare the SIGNIFICANT words
+   rather than the string, ignoring filler and punctuation, so a rewording and
+   a hyphen do not hide a duplicate. Detection only - what happens to them is
+   the owner's call. */
+const DUP_STOP = new Set(["the","a","an","and","or","of","for","to","in","on","with","my","our",
+  "system","systems","unit","units","reference","details","detail","info","information",
+  "note","notes","misc","general","overview"]);
+  // NOTE: "main", "house", "master", "new", "old" are deliberately NOT filler.
+  // "Main House HVAC" and "Master House HVAC" are two different machines.
+function dupTokens(t){
+  return String(t||"").toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/)
+    // keep lone digits: the "1" in "Water Heater #1" is the whole distinction
+    .filter(w => w && (w.length > 1 || /^\d$/.test(w)) && !DUP_STOP.has(w));
+}
+function dupNums(t){
+  return (String(t||"").match(/\d+/g) || []).join(",");
+}
+function dupKey(t){
+  // letters and digits only, sorted: blind to word order, hyphens and spacing,
+  // so "Kitchen Jenn-Air Appliances" and "jennair kitchen appliances" agree
+  return dupTokens(t).join("").split("").sort().join("");
+}
+function dupSimilar(a, b){
+  const A = new Set(dupTokens(a)), B = new Set(dupTokens(b));
+  if(!A.size || !B.size) return 0;
+  let shared = 0;
+  A.forEach(w => { if(B.has(w)) shared++; });
+  return shared / new Set([...A, ...B]).size;          // Jaccard
+}
+function dupSameThing(a, b){
+  // Different numbers mean different things: heater #1 is not heater #2,
+  // and zone 1 is not zone 2, however alike the rest of the name reads.
+  const na = dupNums(a), nb = dupNums(b);
+  if(na && nb && na !== nb) return false;
+  return dupKey(a) === dupKey(b) || dupSimilar(a, b) >= 0.6;
+}
+// Group entries that look like the same thing. Returns arrays of 2+ ids.
+function findDuplicates(entries){
+  const list = entries || [];
+  const used = new Set(), groups = [];
+  for(let i = 0; i < list.length; i++){
+    if(used.has(list[i].id)) continue;
+    const group = [list[i]];
+    for(let j = i + 1; j < list.length; j++){
+      if(used.has(list[j].id)) continue;
+      if(dupSameThing(list[i].title, list[j].title)){
+        group.push(list[j]);
+        used.add(list[j].id);
+      }
+    }
+    if(group.length > 1){ used.add(list[i].id); groups.push(group.map(x => x.id)); }
+  }
+  return groups;
+}
+
 const KIND_META = {
   equipment: { label:"Equipment",        hint:"things in the house" },
   vendor:    { label:"Vendors & people", hint:"who services it" },
@@ -2999,14 +3055,32 @@ const KIND_META = {
 };
 const KIND_ORDER = ["equipment", "vendor", "note"];
 
-/* Review the tidy-up before it happens. Each row shows what changes, and
-   anything left unticked is simply not touched. */
+/* Review the tidy-up before it happens. Every row carries a recommended name
+   you can edit in place and a category you can change, so accepting is one tap
+   and disagreeing is one edit. Accept all is right there for anyone who would
+   rather fix things later in the list. */
 function OrganizeSheet({ review, onApply, onClose }){
   const rows = review.rows || [];
+  const [edits, setEdits] = useState({});                       // id -> edited title
+  const [kinds, setKinds] = useState({});                       // id -> overridden kind
   const [sel, setSel] = useState(() => rows.filter(r => r.changed).map(r => r.id));
+  const [del, setDel] = useState([]);                           // ids marked redundant
   const toggle = (id) => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
-  const chosen = rows.filter(r => sel.includes(r.id));
+  const toggleDel = (id) => setDel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+
+  const titleOf = (r) => (edits[r.id] !== undefined ? edits[r.id] : r.title);
+  const kindOfRow = (r) => kinds[r.id] || r.kind;
+  const dupGroups = review.dupGroups || [];
+  const dupOf = {};
+  dupGroups.forEach((g, i) => g.forEach(id => { dupOf[id] = i + 1; }));
+
+  const chosen = rows.filter(r => sel.includes(r.id) && !del.includes(r.id))
+    .map(r => ({ ...r, title: titleOf(r).trim() || r.title, kind: kindOfRow(r) }));
   const changed = rows.filter(r => r.changed);
+  const acceptAll = () => { setSel(rows.map(r => r.id)); setEdits({}); setKinds({}); };
+
+  const KINDS = [["equipment","System"],["vendor","Vendor"],["note","Note"]];
+
   return (
     <>
       <div className="scrim" onClick={onClose}></div>
@@ -3016,24 +3090,27 @@ function OrganizeSheet({ review, onApply, onClose }){
           <h2 className="sheet-title">Organize</h2>
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
-        <div className="hint" style={{marginBottom:10}}>
-          {rows.length} entries read
-          {review.localCount != null ? " - " + review.localCount + " sorted on the spot, " + review.aiCount + " needed a closer look" : ""}.
-          {" "}{changed.length} would change. Nothing is deleted or merged, only renamed and re-sorted,
-          and whatever you untick is left exactly as it is.
+
+        <div className="hint" style={{marginBottom:8}}>
+          {rows.length} entries
+          {review.localCount != null ? ` · ${review.localCount} sorted on the spot, ${review.aiCount} needed a closer look` : ""}.
+          Edit any name or category here, or accept everything and tidy up later. Nothing is merged.
         </div>
-        {rows.some(r => r.needsSplit) &&
+        {dupGroups.length > 0 &&
           <div className="hint" style={{color:"var(--amber)", marginBottom:8}}>
-            {rows.filter(r=>r.needsSplit).length} {rows.filter(r=>r.needsSplit).length===1?"entry holds":"entries hold"} both
-            a contact and equipment details. Those are really two records - filed as equipment for now, worth splitting by hand.
+            {dupGroups.length} possible duplicate {dupGroups.length===1?"group":"groups"} found. Tap the bin on the copy
+            you don&rsquo;t want; the other is kept.
           </div>}
-        <div style={{display:"flex", gap:12, marginBottom:8}}>
-          <button className="assist-toggle" onClick={()=>setSel(changed.map(r=>r.id))}>All changes</button>
-          <button className="assist-toggle" onClick={()=>setSel([])}>None</button>
+
+        <div style={{display:"flex", gap:12, marginBottom:8, flexWrap:"wrap"}}>
+          <button className="assist-toggle" onClick={acceptAll}>Accept all</button>
+          <button className="assist-toggle" onClick={()=>setSel(changed.map(r=>r.id))}>Only changes</button>
+          <button className="assist-toggle" onClick={()=>{ setSel([]); setDel([]); }}>None</button>
         </div>
-        <div className="list" style={{maxHeight:"46vh", overflowY:"auto", marginTop:0}}>
+
+        <div className="list" style={{maxHeight:"44vh", overflowY:"auto", marginTop:0}}>
           {KIND_ORDER.map(k => {
-            const inKind = rows.filter(r => r.kind === k);
+            const inKind = rows.filter(r => kindOfRow(r) === k);
             if(!inKind.length) return null;
             return (
               <div key={k}>
@@ -3044,37 +3121,54 @@ function OrganizeSheet({ review, onApply, onClose }){
                 </div>
                 {inKind.map(r => {
                   const on = sel.includes(r.id);
+                  const gone = del.includes(r.id);
                   return (
-                    <button key={r.id} className={"item"+(on?"":" muted")} onClick={()=>toggle(r.id)} disabled={!r.changed}>
-                      <span className="rem-done" style={on?{background:"var(--amber-dim)",color:"var(--amber)",borderColor:"var(--amber-line)"}:{}}>
-                        <Icon d={on?ICONS.check:ICONS.plus} size={15}/>
-                      </span>
+                    <div key={r.id} className={"item"+(on && !gone ? "" : " muted")} style={{alignItems:"flex-start"}}>
+                      <button className="rem-done" style={{marginTop:2, ...(on && !gone ? {background:"var(--amber-dim)",color:"var(--amber)",borderColor:"var(--amber-line)"} : {})}}
+                        onClick={()=>toggle(r.id)} aria-label={on ? "Skip this one" : "Accept this one"}>
+                        <Icon d={on && !gone ? ICONS.check : ICONS.plus} size={15}/>
+                      </button>
                       <div className="item-body">
-                        <div className="item-title">{r.title}</div>
-                        {r.title !== r.was &&
-                          <div style={{fontSize:12, color:"var(--ink-3)", marginTop:3}}>was &ldquo;{r.was}&rdquo;</div>}
+                        <input className="input" style={{marginBottom:6, textDecoration: gone ? "line-through" : "none"}}
+                          value={titleOf(r)} disabled={gone}
+                          onChange={e=>setEdits(p => ({ ...p, [r.id]: e.target.value }))} />
+                        {titleOf(r) !== r.was &&
+                          <div style={{fontSize:11.5, color:"var(--ink-3)", marginBottom:5}}>was &ldquo;{r.was}&rdquo;</div>}
+                        <div className="pills" style={{marginBottom:5}}>
+                          {KINDS.map(([k2,label]) =>
+                            <button key={k2} className={"pill "+(kindOfRow(r)===k2?"on":"")}
+                              onClick={()=>setKinds(p => ({ ...p, [r.id]: k2 }))}>{label}</button>)}
+                        </div>
                         <div className="item-meta">
                           {r.section && <span className="chip">{r.section}</span>}
                           {r.trade && <span className="chip amber">{r.trade}</span>}
                           {r.phone && <span className="chip">{r.phone}</span>}
+                          {dupOf[r.id] && <span className="chip red">duplicate {dupOf[r.id]}</span>}
                           {r.needsSplit && <span className="chip red">two records?</span>}
                           {r.confidence === "ai" ? <span className="chip">asked AI</span>
                             : r.confidence === "high" ? <span className="chip green">certain</span>
                             : r.confidence === "medium" ? <span className="chip">likely</span> : null}
-                          {!r.changed && <span className="chip">already fine</span>}
                         </div>
                         {r.why && <div style={{fontSize:11.5, color:"var(--ink-3)", marginTop:3}}>{r.why}</div>}
                       </div>
-                    </button>
+                      {dupOf[r.id] &&
+                        <button className="rem-done" style={{marginTop:2, ...(gone ? {background:"#d1735c22",color:"#e79b86",borderColor:"#d1735c55"} : {})}}
+                          onClick={()=>toggleDel(r.id)} aria-label={gone ? "Keep this one" : "Remove as redundant"}>
+                          <Icon d={gone ? ICONS.undo : ICONS.trash} size={15}/>
+                        </button>}
+                    </div>
                   );
                 })}
               </div>
             );
           })}
         </div>
-        <button className="btn btn-primary btn-block" style={{marginTop:12}} disabled={!chosen.length}
-          onClick={()=>onApply(chosen)}>
-          Apply {chosen.length} {chosen.length===1?"change":"changes"}
+
+        <button className="btn btn-primary btn-block" style={{marginTop:12}} disabled={!chosen.length && !del.length}
+          onClick={()=>onApply(chosen, del)}>
+          {del.length
+            ? `Apply ${chosen.length}, delete ${del.length}`
+            : `Apply ${chosen.length} ${chosen.length===1?"change":"changes"}`}
         </button>
       </div>
     </>
@@ -4706,23 +4800,44 @@ function App(){
                trade:(a && a.trade)||null, phone:(a && a.phone)||null, changed };
     });
     if(!rows.length){ showToast("Nothing to organize."); return; }
-    log("ORGANIZE", mine.length + " entries, " + needsModel.length + " sent to AI");
-    setOrganize({ rows, localCount: mine.length - needsModel.length, aiCount: needsModel.length });
+    // Look for the same thing written twice, on the names as they will READ
+    // after the tidy-up, so a rename that reveals a duplicate still catches it.
+    const dupGroups = findDuplicates(rows.map(r => ({ id:r.id, title:r.title })));
+    log("ORGANIZE", mine.length + " entries, " + needsModel.length + " to AI, " + dupGroups.length + " dup groups");
+    setOrganize({ rows, dupGroups, localCount: mine.length - needsModel.length, aiCount: needsModel.length });
   };
-  const applyOrganize = (chosen) => {
+  const applyOrganize = (chosen, removeIds) => {
+    const gone = new Set(removeIds || []);
+    if(gone.size && !confirm("Delete " + gone.size + " entr" + (gone.size===1?"y":"ies") +
+        " marked redundant? The ones you kept are not affected.")) return;
     const pick = {}; chosen.forEach(r => { pick[r.id] = r; });
     const now = nowISO();
-    store.saveCollection("systems", (store.data.systems||[]).map(x => {
-      const r = pick[x.id];
-      if(!r) return x;
-      // Rename and reclassify only. Notes, equipment, photos and links are
-      // untouched - this is a tidy-up, not a rewrite.
-      return { ...x, title:r.title, section:r.section, kind:r.kind,
-               trade:r.trade || x.trade || null, phone:r.phone || x.phone || null,
-               updatedAt:now };
-    }));
+    const next = (store.data.systems||[])
+      .filter(x => !gone.has(x.id))
+      .map(x => {
+        const r = pick[x.id];
+        if(!r) return x;
+        // Rename and reclassify only. Notes, equipment, photos and links are
+        // untouched - this is a tidy-up, not a rewrite.
+        return { ...x, title:r.title, section:r.section, kind:r.kind,
+                 trade:r.trade || x.trade || null, phone:r.phone || x.phone || null,
+                 updatedAt:now };
+      });
+    store.saveCollection("systems", next);
+    // A deleted entry must not leave an issue or a log entry pointing at nothing.
+    if(gone.size){
+      const evs = store.data.events || [];
+      if(evs.some(e => gone.has(e.system_id)))
+        store.saveCollection("events", evs.map(e => gone.has(e.system_id) ? {...e, system_id:null, updatedAt:now} : e));
+      const jbs = store.data.jobs || [];
+      if(jbs.some(j => gone.has(j.system_id)))
+        store.saveCollection("jobs", jbs.map(j => gone.has(j.system_id) ? {...j, system_id:null, updatedAt:now} : j));
+    }
     setOrganize(null);
-    showToast("Organized " + chosen.length + " entr" + (chosen.length===1?"y":"ies"));
+    const bits = [];
+    if(chosen.length) bits.push(chosen.length + " organized");
+    if(gone.size) bits.push(gone.size + " deleted");
+    showToast(bits.join(", ") || "Nothing changed");
   };
 
   // ---- systems & notes ----
