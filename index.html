@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.40.0";
+const APP_VERSION = "0.41.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.23";
+const BUILD = "2026-07-31.24";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1840,7 +1840,7 @@ function StoredImg({ path, onRemove }){
   );
 }
 
-function EventSheet({ event, draft, homeId, systems, onCreateSystem, onSave, onDelete, onClose }){
+function EventSheet({ event, draft, homeId, systems, documents, onCreateSystem, onAttachReceipt, onSave, onDelete, onClose }){
   const seed = event || draft || null;   // draft = prefilled-but-unsaved (e.g. from a receipt)
   const [id] = useState(() => (seed && seed.id) || uid());
   const [title, setTitle] = useState(seed ? (seed.title||"") : "");
@@ -1853,7 +1853,10 @@ function EventSheet({ event, draft, homeId, systems, onCreateSystem, onSave, onD
   const [vendor, setVendor] = useState(seed ? (seed.vendor||"") : "");
   const [notes, setNotes] = useState(seed ? (seed.notes||"") : "");
   const [photos, setPhotos] = useState(event && event.photos ? event.photos : []);
-  const [receipt] = useState(() => (seed && seed.receipt) || null);   // {docId, path, name}
+  const [receipt, setReceipt] = useState(() => (seed && seed.receipt) || null);   // {docId, path, name}
+  const [attaching, setAttaching] = useState(false);
+  const [pickDoc, setPickDoc] = useState(false);
+  const [docQ, setDocQ] = useState("");
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState("");
   const fileRef = useRef(null);
@@ -1882,7 +1885,7 @@ function EventSheet({ event, draft, homeId, systems, onCreateSystem, onSave, onD
       system_id: systemId || null, job_id: (seed && seed.job_id) || null,
       cost: cost.trim()==="" ? null : (Number(cost) || 0),
       vendor: vendor.trim(), notes: notes.trim(), photos,
-      receipt: receipt || (event ? event.receipt : null) || null,
+      receipt: receipt || null,
       createdAt: event ? event.createdAt : nowISO(), updatedAt: nowISO(),
     });
   };
@@ -1940,16 +1943,64 @@ function EventSheet({ event, draft, homeId, systems, onCreateSystem, onSave, onD
           <textarea className="textarea" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Details, part numbers, warranty info..." />
         </div>
 
-        {receipt &&
-          <div className="field">
-            <label className="label">Receipt</label>
-            <button className="btn btn-ghost btn-block" onClick={()=>openStoredFile(receipt.path, setErr)}>
-              <Icon d={ICONS.external} size={16}/> {receipt.name || "Open receipt"}
-            </button>
-          </div>}
+        {/* The invoice is a document, not a snapshot of the visit. Kept separate
+            from the photos below so neither has to stand in for the other. */}
+        <div className="field">
+          <label className="label">Invoice or receipt</label>
+          {receipt ? (
+            <div style={{display:"flex", gap:8}}>
+              <button className="btn btn-ghost" style={{flex:1}} onClick={()=>openStoredFile(receipt.path, setErr)}>
+                <Icon d={ICONS.external} size={16}/> {receipt.name || "Open"}
+              </button>
+              <button className="assist-toggle" style={{marginTop:0}} onClick={()=>setReceipt(null)}>Remove</button>
+            </div>
+          ) : (
+            <>
+              <label className="btn btn-ghost btn-block" style={{cursor:"pointer"}}>
+                <Icon d={ICONS.upload} size={16}/> {attaching ? "Filing…" : "Attach a file or photo"}
+                {/* pdf + image, no capture attribute: iOS then offers Photo
+                    Library, Take Photo and Choose File all from one control */}
+                <input type="file" accept="application/pdf,image/*" style={{display:"none"}} disabled={attaching}
+                  onChange={async e => { const f=(e.target.files||[])[0]; e.target.value="";
+                    if(!f || !onAttachReceipt) return;
+                    setAttaching(true); setErr("");
+                    try{ const rec = await onAttachReceipt(f); if(rec) setReceipt(rec); else setErr("Couldn't file that."); }
+                    catch(err){ setErr(err.message || "Couldn't file that."); }
+                    setAttaching(false); }} />
+              </label>
+              <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>setPickDoc(v=>!v)}>
+                <Icon d={ICONS.doc} size={16}/> {pickDoc ? "Cancel" : "Pick from my documents"}
+              </button>
+              {pickDoc &&
+                <>
+                  <input className="input" style={{marginTop:8}} value={docQ} autoFocus
+                    onChange={e=>setDocQ(e.target.value)} placeholder="Search documents" />
+                  <div className="list" style={{marginTop:6, maxHeight:"26vh", overflowY:"auto"}}>
+                    {(documents||[])
+                      .filter(d => { const q=docQ.trim().toLowerCase();
+                        return !q || ((d.name||"")+" "+(d.sourceName||"")).toLowerCase().includes(q); })
+                      .slice(0, 40)
+                      .map(d => (
+                        <button key={d.id} className="item" onClick={()=>{
+                          setReceipt({ docId:d.id, path:d.path, name:d.name }); setPickDoc(false); }}>
+                          <div className="item-body">
+                            <div className="item-title">{d.name}</div>
+                            <div className="item-meta">
+                              <span className="chip">{migrateDocCat(d.category)}</span>
+                              <span className="chip">{fileKind(d.path, d.mime)}</span>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+                </>}
+              <div className="hint">Take a photo, pick one from your library, choose a PDF, or point at a document you have already filed.</div>
+            </>
+          )}
+        </div>
 
         <div className="field">
-          <label className="label">Photos</label>
+          <label className="label">Photos of the work</label>
           <div className="photos-grid">
             {photos.map(p => <StoredImg key={p} path={p} onRemove={()=>removePhoto(p)} />)}
             <button className="add-photo" onClick={()=>fileRef.current && fileRef.current.click()} disabled={uploading}>
@@ -3371,7 +3422,7 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
   );
 }
 
-function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, onDelete, onClose }){
+function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntry, onSave, onDelete, onClose }){
   const s = system || {};
   const [title, setTitle] = useState(s.title || "");
   const [section, setSection] = useState(s.section || "");
@@ -3638,16 +3689,18 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, on
             <div className="field-label">Service history ({history.length})</div>
             <div className="list" style={{marginTop:0, maxHeight:"22vh", overflowY:"auto"}}>
               {history.map(e => (
-                <div key={e.id} className="item">
+                <button key={e.id} className="item" onClick={()=>onEditEntry && onEditEntry(e)}>
                   <div className="item-body">
                     <div className="item-title">{e.title}</div>
                     <div className="item-meta">
                       {e.date ? <span className="chip">{fmtDate(e.date)}</span> : <span className="chip">No date</span>}
                       {e.cost!=null && e.cost!=="" && <span className="chip">${fmtNum(e.cost)}</span>}
                       {e.vendor && <span className="chip">{e.vendor}</span>}
+                      {e.receipt && <span className="chip">invoice</span>}
                     </div>
                   </div>
-                </div>
+                  <span className="hub-card-chev"><Icon d={ICONS.chev} size={16}/></span>
+                </button>
               ))}
             </div>
           </>}
@@ -3978,7 +4031,7 @@ function JobRow({ j, systemName, spend, onOpen, onDelete }){
   );
 }
 
-function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSystem, onSave, onDelete, onLogVisit, onLogReceipt, onClose }){
+function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSystem, onSave, onDelete, onLogVisit, onLogReceipt, onEditEntry, onClose }){
   const j = job || {};
   const [title, setTitle] = useState(j.title || "");
   const [symptom, setSymptom] = useState(j.symptom || "");
@@ -4100,16 +4153,18 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
             {history && history.length > 0 ? (
               <div className="list" style={{marginTop:0, maxHeight:"24vh", overflowY:"auto"}}>
                 {history.map(e => (
-                  <div key={e.id} className="item">
+                  <button key={e.id} className="item" onClick={()=>onEditEntry && onEditEntry(e)}>
                     <div className="item-body">
                       <div className="item-title">{e.title}</div>
                       <div className="item-meta">
                         {e.date ? <span className="chip">{fmtDate(e.date)}</span> : <span className="chip">No date</span>}
                         {e.cost!=null && e.cost!=="" && <span className="chip">${fmtNum(e.cost)}</span>}
                         {e.vendor && <span className="chip">{e.vendor}</span>}
+                        {e.receipt && <span className="chip">invoice</span>}
                       </div>
                     </div>
-                  </div>
+                    <span className="hub-card-chev"><Icon d={ICONS.chev} size={16}/></span>
+                  </button>
                 ))}
               </div>
             ) : <div className="hint">Nothing logged against this issue yet.</div>}
@@ -4697,6 +4752,18 @@ function App(){
     showToast(list.length + " moved to \"No date\"");
   };
 
+  // Attach an invoice to a log entry: it goes through the normal document
+  // pipeline first, so it is categorized and searchable like everything else,
+  // and only its reference is stored on the entry.
+  const attachReceiptFile = async (file) => {
+    const homes = store.data.homes || [];
+    const ah = homes.find(h => h.id === store.cfg.activeHomeId) || homes[0] || null;
+    if(!ah) return null;
+    const res = await addDocuments([file], ah.id, true);
+    const rec = (res && (res.added[0] || res.replaced[0])) || null;
+    return rec ? { docId: rec.id, path: rec.path, name: rec.name } : null;
+  };
+
   // ---- jobs (one problem, start to finish) + coverage ----
   const saveJob = (rec) => {
     const list = store.data.jobs || [];
@@ -5277,7 +5344,8 @@ function App(){
       {eventSheet && activeHome &&
         <EventSheet event={eventSheet.event} draft={eventSheet.draft} homeId={activeHome.id}
           systems={(store.data.systems||[]).filter(x => x.home_id === activeHome.id)}
-          onCreateSystem={createSystemQuick}
+          documents={(store.data.documents||[]).filter(x => x.home_id === activeHome.id)}
+          onCreateSystem={createSystemQuick} onAttachReceipt={attachReceiptFile}
           onSave={saveEvent} onDelete={deleteEvent} onClose={()=>setEventSheet(null)} />}
 
       {trelloReview &&
@@ -5292,7 +5360,9 @@ function App(){
             .sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))) : []}
           onCreateSystem={createSystemQuick}
           onSave={saveJob} onDelete={deleteJob} onLogVisit={logVisitForJob}
-          onLogReceipt={pickReceiptForJob} onClose={()=>setJobSheet(null)} />}
+          onLogReceipt={pickReceiptForJob}
+          onEditEntry={(e)=>{ setJobSheet(null); setEventSheet({ event:e }); }}
+          onClose={()=>setJobSheet(null)} />}
 
       {covChooser && activeHome &&
         <CoverageChooser
@@ -5317,6 +5387,7 @@ function App(){
         <SystemSheet system={sysSheet.system} homeId={activeHome.id} presetKind={sysSheet.kind}
           siblings={(store.data.systems||[]).filter(x => x.home_id === activeHome.id)}
           history={sysSheet.system ? (store.data.events||[]).filter(e => e.system_id === sysSheet.system.id).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))) : []}
+          onEditEntry={(e)=>{ setSysSheet(null); setEventSheet({ event:e }); }}
           onSave={saveSystem} onDelete={deleteSystem} onClose={()=>setSysSheet(null)} />}
 
       {remSheet && activeHome &&
