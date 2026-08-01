@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.41.0";
+const APP_VERSION = "0.42.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.24";
+const BUILD = "2026-07-31.25";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2935,7 +2935,10 @@ function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onR
           <span className="hub-card-ic" style={{color:"var(--amber)"}}><Icon d={ICONS.wrenchAlert} size={19}/></span>
           <span className="hub-card-body">
             <span className="hub-card-title">{openJobs.length === 1 ? openJobs[0].title : openJobs.length + " open issues"}</span>
-            <span className="hub-card-sub">{openJobs.length === 1 ? jobState(openJobs[0].status).label : "Needs attention"}</span>
+            <span className="hub-card-sub">{openJobs.length === 1
+              ? jobState(openJobs[0].status).label +
+                (waitingLabels(openJobs[0]).length ? " · waiting on " + waitingLabels(openJobs[0]).join(", ").toLowerCase() : "")
+              : "Needs attention"}</span>
           </span>
           <span className="hub-card-chev"><Icon d={ICONS.chev} size={18}/></span>
         </button>}
@@ -2996,6 +2999,20 @@ const JOB_STATES = [
 function jobState(k){ return JOB_STATES.find(s => s.k === k) || JOB_STATES[0]; }
 function isJobOpen(j){ return !jobState(j.status).done; }
 const POLICY_KINDS = ["Home warranty", "Homeowners insurance", "Service plan", "Other"];
+// Status is the stage an issue has REACHED. What it is stuck on is a separate
+// question, and there is usually more than one answer at once: a diagnosis in
+// hand, a warranty claim open, and a second opinion still coming.
+const WAITING_ON = [
+  { k:"coverage",  label:"Coverage decision" },
+  { k:"opinion",   label:"Second opinion" },
+  { k:"quote",     label:"Quote" },
+  { k:"parts",     label:"Parts" },
+  { k:"schedule",  label:"Scheduling" },
+  { k:"decision",  label:"My decision" },
+];
+function waitingLabels(j){
+  return ((j && j.waitingOn) || []).map(k => (WAITING_ON.find(w => w.k === k) || {}).label).filter(Boolean);
+}
 
 // The unit's own photo, signed on demand. Falls back to its icon when absent.
 function SysThumb({ path }){
@@ -4020,6 +4037,7 @@ function JobRow({ j, systemName, spend, onOpen, onDelete }){
           <div className="item-title">{j.title}</div>
           <div className="item-meta">
             <span className={"chip "+(st.done?"":"amber")}>{st.label}</span>
+            {waitingLabels(j).map(l => <span key={l} className="chip">waiting: {l}</span>)}
             {systemName && <span className="chip">{systemName}</span>}
             {spend > 0 && <span className="chip">${fmtNum(spend)}</span>}
             {j.openedAt && <span className="chip">opened {fmtDate(j.openedAt)}</span>}
@@ -4040,6 +4058,7 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
   const [systemId, setSystemId] = useState(j.system_id || "");
   const [status, setStatus] = useState(j.status || "open");
   const [cov, setCov] = useState(j.coverage || {});
+  const [waiting, setWaiting] = useState(j.waitingOn || []);
   const [notes, setNotes] = useState(j.notes || "");
   const setCovField = (k,v) => setCov(p => ({ ...p, [k]: v }));
 
@@ -4060,7 +4079,8 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
     onSave({
       ...j, id: j.id || uid(), home_id: ownerHome,
       title: t, symptom: symptom.trim(), system_id: moved ? null : (systemId || null),
-      status, coverage: (moved || !Object.keys(clean).length) ? null : clean, notes: notes.trim(),
+      status, waitingOn: waiting.length ? waiting : null,
+      coverage: (moved || !Object.keys(clean).length) ? null : clean, notes: notes.trim(),
       openedAt: j.openedAt || todayStr(),
       resolvedAt: jobState(status).done ? (j.resolvedAt || todayStr()) : null,
       createdAt: j.createdAt || now, updatedAt: now,
@@ -4108,11 +4128,19 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
               : eq.warranty === "registered" ? " · warranty registered" : ""}
           </div>}
 
-        <label className="field-label">Status</label>
+        <label className="field-label">Where it stands</label>
         <div className="pills">
           {JOB_STATES.map(s =>
             <button key={s.k} className={"pill "+(status===s.k?"on":"")} onClick={()=>setStatus(s.k)}>{s.label}</button>)}
         </div>
+
+        <label className="field-label">Waiting on</label>
+        <div className="pills">
+          {WAITING_ON.map(w =>
+            <button key={w.k} className={"pill "+(waiting.includes(w.k)?"on":"")}
+              onClick={()=>setWaiting(v => v.includes(w.k) ? v.filter(x=>x!==w.k) : [...v, w.k])}>{w.label}</button>)}
+        </div>
+        <div className="hint">Pick as many as apply. An issue is usually stuck on more than one thing at once.</div>
 
         {/* Coverage: the prompt that stops money going out the door needlessly. */}
         <label className="field-label">Coverage</label>
@@ -4131,9 +4159,11 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
               <>
                 <label className="field-label">Claim number</label>
                 <input className="input" value={cov.claimNo||""} onChange={e=>setCovField("claimNo", e.target.value)} placeholder="Once filed" />
-                <label className="field-label">What they determined</label>
+                <label className="field-label">Coverage decision</label>
                 <textarea className="input" style={{minHeight:64, resize:"vertical"}} value={cov.determination||""}
-                  onChange={e=>setCovField("determination", e.target.value)} placeholder="Covered, denied, partial, and why." />
+                  onChange={e=>setCovField("determination", e.target.value)}
+                  placeholder="What the warranty company decides: covered, denied, partial, and why." />
+                <div className="hint">The insurer&rsquo;s answer. A contractor&rsquo;s findings belong on their visit in the timeline.</div>
               </>}
           </>
         ) : (
