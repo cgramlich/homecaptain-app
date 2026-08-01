@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.38.0";
+const APP_VERSION = "0.39.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.21";
+const BUILD = "2026-07-31.22";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2964,8 +2964,8 @@ function SystemRow({ s, jobs, onEdit, onDelete }){
   return (
     <SwipeRow onDelete={()=>onDelete(s)}>
       <div className="item">
-        {s.photo
-          ? <SysThumb path={s.photo} />
+        {((s.photos||[])[0] || s.photo)
+          ? <SysThumb path={(s.photos||[])[0] || s.photo} />
           : <span className="sys-ic"><Icon d={systemIcon(s)} size={17}/></span>}
         <button className="rem-body" onClick={()=>onEdit(s)}>
           <div className="item-title">{s.title}</div>
@@ -3384,24 +3384,33 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, on
   const [linkedIds, setLinkedIds] = useState(s.linkedIds || []);
   const [linking, setLinking] = useState(false);
   const [linkQ, setLinkQ] = useState("");
-  const [photo, setPhoto] = useState(s.photo || null);
+  const MAX_PHOTOS = 4;
+  // Seeded from the older single-photo field so nothing already saved is lost.
+  const [photos, setPhotos] = useState(() => s.photos || (s.photo ? [s.photo] : []));
   const [scanning, setScanning] = useState("");
   const [err, setErr] = useState("");
   const setField = (k, v) => setEq(p => ({ ...p, [k]: v }));
 
   // A picture of the unit itself, distinct from the rating plate: it is what
   // makes the list readable at a glance, and what you show a contractor.
-  const onPhoto = async (file) => {
-    if(!file) return;
-    setErr(""); setScanning("Adding the photo…");
-    try{
-      const b64 = await resizeImage(file);
-      const path = "systems/" + (s.id || "new") + "/photo-" + Date.now().toString(36) + ".jpg";
-      await uploadFile(path, b64);
-      if(photo && photo !== path) deleteFile(photo);
-      setPhoto(path); setScanning("");
-    }catch(e){ setScanning(""); setErr(e.message || "Couldn't add that photo."); }
+  const onPhoto = async (fileList) => {
+    const files = Array.from(fileList || []).slice(0, MAX_PHOTOS - photos.length);
+    if(!files.length) return;
+    setErr("");
+    const added = [];
+    for(let i = 0; i < files.length; i++){
+      setScanning("Adding photo " + (i + 1) + " of " + files.length + "…");
+      try{
+        const b64 = await resizeImage(files[i]);
+        const path = "systems/" + (s.id || "new") + "/photo-" + Date.now().toString(36) + "-" + i + ".jpg";
+        await uploadFile(path, b64);
+        added.push(path);
+      }catch(e){ setErr(e.message || "Couldn't add that photo."); }
+    }
+    if(added.length) setPhotos(p => [...p, ...added].slice(0, MAX_PHOTOS));
+    setScanning("");
   };
+  const removePhoto = (path) => { deleteFile(path); setPhotos(p => p.filter(x => x !== path)); };
 
   // Photograph the rating plate -> upload -> AI transcribes -> fill the fields.
   const onPlate = async (file) => {
@@ -3432,7 +3441,9 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, on
       kind: kind || (classifyEntry({ title, notes, equipment: eq }).kind === 'mixed'
         ? 'equipment' : classifyEntry({ title, notes, equipment: eq }).kind),
       equipment: Object.keys(clean).length ? clean : null,
-      installer: installer.trim(), photo: photo || null,
+      installer: installer.trim(),
+      photos: photos.length ? photos : null,
+      photo: photos[0] || null,   // first one, so the list thumbnail keeps working
       linkedIds: linkedIds.length ? linkedIds : null,
       attachments: s.attachments || [],
       source: s.source || "manual",
@@ -3492,20 +3503,27 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onSave, on
           <span className="sys-ic" style={{width:52, height:52, borderRadius:11}}>
             <Icon d={systemIcon({ title, section, equipment: eq })} size={22}/>
           </span>
-          <div style={{flex:1, display:"flex", gap:8}}>
-            <label className="assist-toggle" style={{marginTop:0, cursor:"pointer"}}>
-              {photo ? "Replace photo" : "Add a photo of it"}
-              <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
-                onChange={e=>{ const f=(e.target.files||[])[0]; e.target.value=""; onPhoto(f); }} />
-            </label>
-            {photo && <button className="assist-toggle" style={{marginTop:0}}
-              onClick={()=>{ deleteFile(photo); setPhoto(null); }}>Remove</button>}
+          <div style={{flex:1}}>
+            <div style={{fontSize:13, color:"var(--ink-3)"}}>
+              {photos.length ? photos.length + " of " + MAX_PHOTOS + " photos" : "No photos yet"}
+            </div>
           </div>
         </div>
-        {photo && <StoredImg path={photo} onRemove={()=>{ deleteFile(photo); setPhoto(null); }} />}
-        <label className="btn btn-ghost btn-block" style={{cursor:"pointer"}}>
+        {/* No capture attribute: that forces the camera and hides the library.
+            Multiple, so several can come from the roll in one go. */}
+        <div className="photos-grid">
+          {photos.map(ph => <StoredImg key={ph} path={ph} onRemove={()=>removePhoto(ph)} />)}
+          {photos.length < MAX_PHOTOS &&
+            <label className="add-photo" style={{cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}>
+              <Icon d={ICONS.camera} size={18}/>
+              <input type="file" accept="image/*" multiple style={{display:"none"}}
+                onChange={e=>{ const f=e.target.files; e.target.value=""; onPhoto(f); }} />
+            </label>}
+        </div>
+        <div className="hint">Take a photo or pick from your library. Up to {MAX_PHOTOS}.</div>
+        <label className="btn btn-ghost btn-block" style={{cursor:"pointer", marginTop:8}}>
           <Icon d={ICONS.camera} size={16}/> {eq.model ? "Re-scan the rating plate" : "Scan the rating plate"}
-          <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+          <input type="file" accept="image/*" style={{display:"none"}}
             onChange={e=>{ const f=(e.target.files||[])[0]; e.target.value=""; onPlate(f); }} />
         </label>
         <div className="hint">Photograph the metal data plate on the unit. The model, serial, and date of manufacture fill themselves in.</div>
