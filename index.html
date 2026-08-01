@@ -332,9 +332,9 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.36.0";
+const APP_VERSION = "0.36.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
-const BUILD = "2026-07-31.18";
+const BUILD = "2026-07-31.19";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -579,10 +579,10 @@ async function parseTrello(cards){
 // Ask the backend to sort a home's Systems & Notes into equipment / vendors /
 // notes and propose cleaner names. Returns proposals only; nothing is applied
 // until the owner approves it.
-async function organiseSystems(entries){
+async function organizeSystems(entries){
   const token = await authToken();
   if(!token) throw new Error("Not signed in");
-  const r = await fetch(API_BASE + "/api/systems/organise", {
+  const r = await fetch(API_BASE + "/api/systems/organize", {
     method:"POST",
     headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
     body: JSON.stringify({ entries })
@@ -591,7 +591,7 @@ async function organiseSystems(entries){
     let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
     if(r.status===402 || r.status===429) throw new Error(detail || "AI is at its limit for now. Try again later.");
     if(r.status===503) throw new Error(detail || "AI is temporarily unavailable.");
-    throw new Error(detail || ("Couldn't organise that list ("+r.status+")."));
+    throw new Error(detail || ("Couldn't organize that list ("+r.status+")."));
   }
   return await r.json();
 }
@@ -3001,7 +3001,7 @@ const KIND_ORDER = ["equipment", "vendor", "note"];
 
 /* Review the tidy-up before it happens. Each row shows what changes, and
    anything left unticked is simply not touched. */
-function OrganiseSheet({ review, onApply, onClose }){
+function OrganizeSheet({ review, onApply, onClose }){
   const rows = review.rows || [];
   const [sel, setSel] = useState(() => rows.filter(r => r.changed).map(r => r.id));
   const toggle = (id) => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
@@ -3013,7 +3013,7 @@ function OrganiseSheet({ review, onApply, onClose }){
       <div className="sheet">
         <div className="sheet-grip"></div>
         <div className="sheet-head">
-          <h2 className="sheet-title">Organise</h2>
+          <h2 className="sheet-title">Organize</h2>
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <div className="hint" style={{marginBottom:10}}>
@@ -3168,7 +3168,7 @@ const KIND_VIEWS = {
 };
 function kindOf(x){ return x.kind || "unsorted"; }
 
-function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTrello, onOrganise }){
+function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTrello, onOrganize }){
   const [expanded, setExpanded] = useState({});   // closed by default, same as Docs
   const [query, setQuery] = useState("");
   const toggle = (k) => setExpanded(e => ({ ...e, [k]: !e[k] }));
@@ -3190,7 +3190,7 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
         <h3 className="title-sm">{cfg.empty}</h3>
         <p>{cfg.body}</p>
         {mine.length > 0 &&
-          <button className="btn btn-ghost" style={{marginTop:14}} onClick={onOrganise}>
+          <button className="btn btn-ghost" style={{marginTop:14}} onClick={onOrganize}>
             <Icon d={ICONS.sparkle} size={16}/> Sort my {mine.length} entries
           </button>}
         <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
@@ -3207,7 +3207,7 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
   const matched = q ? all.filter(s =>
     (s.title||"").toLowerCase().includes(q) || (s.notes||"").toLowerCase().includes(q) || (s.section||"").toLowerCase().includes(q)) : all;
 
-  // Once entries carry a kind (after Organise), group by what things ARE:
+  // Once entries carry a kind (after Organize), group by what things ARE:
   // equipment, the people who service it, then everything else. Until then,
   // fall back to the section they were imported under.
   const byTitle = (a,b) => String(a.title||"").localeCompare(String(b.title||""), undefined, {numeric:true});
@@ -3223,14 +3223,14 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
           {q ? matched.length + " of " + all.length + " match" : all.length + (all.length===1?" entry":" entries")}
         </div>
         <div style={{display:"flex", gap:12}}>
-          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onOrganise}>Organise</button>
+          <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onOrganize}>Organize</button>
           <button className="assist-toggle" style={{marginTop:14, whiteSpace:"nowrap"}} onClick={onAdd}>+ Add</button>
         </div>
       </div>
 
       {unsorted > 0 &&
         <div className="hint" style={{color:"var(--amber)", marginBottom:4}}>
-          {unsorted} {unsorted===1?"entry has":"entries have"} not been sorted into systems, vendors and notes yet. Tap Organise.
+          {unsorted} {unsorted===1?"entry has":"entries have"} not been sorted into systems, vendors and notes yet. Tap Organize.
         </div>}
 
       <div className="doc-tools">
@@ -4111,7 +4111,7 @@ function App(){
   const [remSheet, setRemSheet] = useState(null);       // null | {reminder, preset}
   const [docSheet, setDocSheet] = useState(null);       // null | {doc}
   const [sysSheet, setSysSheet] = useState(null);       // null | {system}
-  const [organise, setOrganise] = useState(null);       // null | {rows}
+  const [organize, setOrganize] = useState(null);       // null | {rows}
   const [jobSheet, setJobSheet] = useState(null);       // null | {job}
   const [polSheet, setPolSheet] = useState(null);       // null | {policy, prefill, sourceDoc}
   const [covChooser, setCovChooser] = useState(false);
@@ -4664,10 +4664,10 @@ function App(){
     showToast("Coverage deleted");
   };
 
-  // ---- organise: sort the imported pile into equipment / vendors / notes ----
-  const runOrganise = async (home) => {
+  // ---- organize: sort the imported pile into equipment / vendors / notes ----
+  const runOrganize = async (home) => {
     const mine = (store.data.systems||[]).filter(x => x.home_id === home.id);
-    if(!mine.length){ showToast("Nothing to organise yet."); return; }
+    if(!mine.length){ showToast("Nothing to organize yet."); return; }
     // Rules first: field presence settles most of these instantly, offline, and
     // the same way every time. The model is for what the rules cannot call, plus
     // titles that are carrying filler and want rewriting.
@@ -4682,7 +4682,7 @@ function App(){
       try{
         const payload = needsModel.map(({x}) => ({ id:x.id, title:x.title||"", section:x.section||"",
                                                    notes:String(x.notes||"").slice(0,400) }));
-        const res = await organiseSystems(payload);
+        const res = await organizeSystems(payload);
         (res.entries||[]).forEach(r => { ai[r.id] = r; });
       }catch(e){
         // The rules still stand on their own, so a failed call degrades rather
@@ -4705,11 +4705,11 @@ function App(){
                why: r.kind === "mixed" ? r.why : (a ? "read by AI" : r.why),
                trade:(a && a.trade)||null, phone:(a && a.phone)||null, changed };
     });
-    if(!rows.length){ showToast("Nothing to organise."); return; }
-    log("ORGANISE", mine.length + " entries, " + needsModel.length + " sent to AI");
-    setOrganise({ rows, localCount: mine.length - needsModel.length, aiCount: needsModel.length });
+    if(!rows.length){ showToast("Nothing to organize."); return; }
+    log("ORGANIZE", mine.length + " entries, " + needsModel.length + " sent to AI");
+    setOrganize({ rows, localCount: mine.length - needsModel.length, aiCount: needsModel.length });
   };
-  const applyOrganise = (chosen) => {
+  const applyOrganize = (chosen) => {
     const pick = {}; chosen.forEach(r => { pick[r.id] = r; });
     const now = nowISO();
     store.saveCollection("systems", (store.data.systems||[]).map(x => {
@@ -4721,8 +4721,8 @@ function App(){
                trade:r.trade || x.trade || null, phone:r.phone || x.phone || null,
                updatedAt:now };
     }));
-    setOrganise(null);
-    showToast("Organised " + chosen.length + " entr" + (chosen.length===1?"y":"ies"));
+    setOrganize(null);
+    showToast("Organized " + chosen.length + " entr" + (chosen.length===1?"y":"ies"));
   };
 
   // ---- systems & notes ----
@@ -5018,7 +5018,7 @@ function App(){
                                  ? <SystemsScreen store={store} home={activeHome} view={tab}
                                      onAdd={()=>setSysSheet({system:null, kind: tab==="vendors" ? "vendor" : tab==="notes" ? "note" : "equipment"})}
                                      onEdit={(s)=>setSysSheet({system:s})}
-                                     onImportTrello={pickTrello} onOrganise={()=>runOrganise(activeHome)}
+                                     onImportTrello={pickTrello} onOrganize={()=>runOrganize(activeHome)}
                                      onDelete={(s)=>{ if(confirm("Delete this entry?")) deleteSystem(s); }} />
               :                    <RemindersScreen store={store} home={activeHome}
                                      onAdd={(preset)=>setRemSheet({reminder:null, preset:preset||null})}
@@ -5124,8 +5124,8 @@ function App(){
           prefill={polSheet.prefill} sourceDoc={polSheet.sourceDoc}
           onSave={savePolicy} onDelete={deletePolicy} onClose={()=>setPolSheet(null)} />}
 
-      {organise && activeHome &&
-        <OrganiseSheet review={organise} onApply={applyOrganise} onClose={()=>setOrganise(null)} />}
+      {organize && activeHome &&
+        <OrganizeSheet review={organize} onApply={applyOrganize} onClose={()=>setOrganize(null)} />}
 
       {sysSheet && activeHome &&
         <SystemSheet system={sysSheet.system} homeId={activeHome.id} presetKind={sysSheet.kind}
