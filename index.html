@@ -153,6 +153,17 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
   display:flex;align-items:center;justify-content:center;border-radius:50%;color:var(--ink-3);}
 .pw-eye:active{color:var(--ink);}
 .pw-eye svg{width:19px;height:19px;stroke-width:1.9;}
+/* Clear button, wrapper geometry and placement are INLINE, ported from
+   MenuCaptain's ClearInput. Only the things that version has no need for
+   live here: the flex hooks below, the spinner fix, and read-only. */
+.input-x:active{filter:brightness(1.35);}
+/* spinners would sit exactly where the clear button goes */
+.clear-wrap .input[type=number]{-moz-appearance:textfield;}
+.clear-wrap .input[type=number]::-webkit-outer-spin-button,
+.clear-wrap .input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+/* Shared home: fields are frozen, so nothing may offer to empty one.
+   Same reasoning as the primary/danger rule below - read-only by default. */
+.app.view-only .sheet .input-x{display:none !important;}  /* frozen fields only; inline display would win otherwise */
 .textarea{resize:vertical;min-height:84px;line-height:1.5;}
 .title-field{margin-bottom:18px;}
 .title-field .label{color:var(--amber);}
@@ -210,13 +221,26 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .doc-group-chev{margin-left:auto;color:var(--ink-3);transition:transform .18s var(--ease);}
 .doc-group-chev.open{transform:rotate(90deg);}
 .doc-tools{display:flex;gap:8px;margin:10px 0 2px;}
-.doc-tools .input{flex:1;min-width:0;}
+/* the clear-wrap is the flex child now, not the field inside it */
+.doc-tools .input,.doc-tools .clear-wrap{flex:1;min-width:0;}
 .doc-tools .select{flex:0 0 116px;}
 .ask-card{margin:2px 0 16px;padding:12px;}
 .ask-row{display:flex;gap:8px;}
-.ask-row .input{flex:1;min-width:0;}
+.ask-row .input,.ask-row .clear-wrap{flex:1;min-width:0;}
 .ask-go{flex:0 0 auto;width:46px;padding:0;}
 .ask-answer{margin-top:11px;font-size:14px;line-height:1.5;color:var(--ink);white-space:pre-wrap;word-break:break-word;}
+/* Conversation bubbles - PORTED from PriorityCaptain's AI chat (tracker-app),
+   the signed-off version of this pattern. Same class names on purpose. */
+.chat-scroll{display:flex;flex-direction:column;gap:10px;padding:12px 0 2px;}
+.bubble{max-width:88%;padding:11px 13px;border-radius:16px;font-size:15px;line-height:1.45;white-space:pre-wrap;word-break:break-word;}
+.bubble.user{align-self:flex-end;background:var(--amber-dim);border:1px solid var(--amber-line);border-bottom-right-radius:5px;}
+.bubble.ai{align-self:flex-start;background:var(--bg-3);border:1px solid var(--line-2);border-bottom-left-radius:5px;}
+.bubble.sys{align-self:center;background:none;color:var(--ink-3);font-size:12.5px;padding:2px 4px;}
+/* clearing the thread is a small icon, not a labelled button */
+.ask-clear{position:absolute;top:6px;right:6px;width:26px;height:26px;border:none;background:none;
+  color:var(--ink-3);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;}
+.ask-clear:active{color:var(--ink);background:var(--bg-4);}
+.ask-card{position:relative;}
 .home-hero{position:relative;border-radius:var(--radius);overflow:hidden;margin:2px 0 14px;aspect-ratio:16/9;background:var(--bg-3);border:1px solid var(--line-2);}
 .home-hero img{width:100%;height:100%;object-fit:cover;display:block;}
 .home-hero-ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;}
@@ -351,7 +375,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.44.0";
+const APP_VERSION = "0.46.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 const BUILD = "2026-08-01.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
@@ -713,13 +737,13 @@ async function readNameplate(path){
 }
 // Ask a natural-language question about one home; the client sends a compact
 // context (facts + log + reminders + document names) and gets a grounded answer.
-async function askHome(question, context){
+async function askHome(question, context, history){
   const token = await authToken();
   if(!token) throw new Error("Not signed in");
   const r = await fetch(API_BASE + "/api/ask", {
     method:"POST",
     headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
-    body: JSON.stringify({ question, context })
+    body: JSON.stringify({ question, context, history: history || [] })
   });
   if(!r.ok){
     let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
@@ -1517,6 +1541,155 @@ function systemIcon(sys){
 }
 
 /* ============================================================
+   SECTION KEYS - one section, one heading.
+   Sections reach a record from three places that spell them differently: a
+   Trello list name (often emoji-prefixed, "* HVAC Systems"), the Organize
+   sweep, and whatever gets typed into the Add form. Grouping on the raw
+   string put a typed "HVAC Systems" under its own heading a few rows below
+   the imported one, and the two headings render IDENTICALLY because
+   .doc-group-title uppercases - so the list looked broken.
+
+   Group on a normalised key instead and keep each record's own spelling.
+   Nothing rewrites the stored value: this is a display and capture fix, so
+   the Organize sweep stays the only thing that renames a section.
+   ============================================================ */
+const RX_SECTION_NOISE = /[^\p{L}\p{N}]+/gu;   // emoji, &, /, dashes, punctuation, spaces
+function sectionKey(s){
+  return String(s || "").toLowerCase().replace(RX_SECTION_NOISE, " ").trim();
+}
+// The sections already in use for a home, one entry per normalised key.
+function sectionCatalogue(list){
+  const byKey = new Map();
+  (list || []).forEach(x => {
+    const raw = String((x && x.section) || "").trim();
+    const k = sectionKey(raw);
+    if(!k) return;
+    if(!byKey.has(k)) byKey.set(k, { key:k, labels:new Map(), count:0 });
+    const e = byKey.get(k);
+    e.count++;
+    e.labels.set(raw, (e.labels.get(raw) || 0) + 1);
+  });
+  return [...byKey.values()].map(e => ({
+    key:e.key, count:e.count, label:bestSectionLabel(e.labels),
+  })).sort((a,b) => a.key.localeCompare(b.key));
+}
+// The spelling most records already use wins the heading, so it does not
+// flip around as entries are added. Ties keep the first seen (Map order).
+function bestSectionLabel(labels){
+  let label = "", best = -1;
+  labels.forEach((n, l) => { if(n > best){ best = n; label = l; } });
+  return label;
+}
+
+/* ============================================================
+   CLEARABLE TEXT BOX - PORTED VERBATIM from MenuCaptain's ClearInput
+   (dining-log-app), which is the signed-off version of this pattern. Do not
+   re-invent it here; if it needs to change, change it there first.
+
+   Two details are the reason to copy rather than rewrite:
+     1. The caller's `style` is SPLIT automatically - layout properties (flex,
+        width, margins) go to the wrapper, everything else to the field - so
+        no call site has to know the field is wrapped.
+     2. Clearing goes through the NATIVE value setter plus a real `input`
+        event, so it works with any handler and with uncontrolled fields,
+        rather than depending on handlers only ever reading e.target.value.
+
+   Deliberately NOT applied to date inputs (the browser draws its own control
+   where the button would sit) or the password field (it already carries the
+   reveal eyeball).
+
+   HomeCaptain additions: a textarea variant, since this app has twelve of
+   them, and a className on the button so the shared-home read-only rule can
+   hide it. MenuCaptain has neither textareas here nor sharing.
+   ============================================================ */
+function clearableParts(props, isArea){
+  const st = props.style || {};
+  const wrapSt = { position:"relative", display:"block" };
+  const inSt = {};
+  for (const k in st){
+    if (k === "flex" || k === "width" || k === "minWidth" || k === "maxWidth" || k.indexOf("margin") === 0) wrapSt[k] = st[k];
+    else inSt[k] = st[k];
+  }
+  inSt.width = "100%";
+  inSt.paddingRight = 38;
+  const rest = {};
+  for (const k in props){ if (k !== "style" && k !== "inputRef" && k !== "className") rest[k] = props[k]; }
+  return { wrapSt, inSt, rest };
+}
+function ClearX({ onClear, isArea }){
+  // NOT suppressed wholesale on a shared home. Clearing a box stores nothing:
+  // writes are refused by saveColl and the save buttons are hidden, so the only
+  // place the button is wrong is a field that is frozen and cannot be typed in
+  // anyway - the sheets. That is a CSS rule (.app.view-only .sheet .input-x),
+  // and it needs !important because this button's display is an inline style.
+  // Suppressing it everywhere would take the clear off the search box, which a
+  // sharee can legitimately type in.
+  return (
+    <button type="button" className="input-x" aria-label="Clear" tabIndex={-1}
+      onMouseDown={(e)=> e.preventDefault()} onClick={onClear}
+      style={{position:"absolute", right:9, top: isArea ? 10 : "50%",
+              transform: isArea ? "none" : "translateY(-50%)",
+              width:22, height:22, borderRadius:"50%", border:"none", cursor:"pointer",
+              background:"var(--line-2)", color:"var(--ink-2)", fontSize:12,
+              padding:0, display:"flex", alignItems:"center", justifyContent:"center"}}>
+      &#10005;
+    </button>
+  );
+}
+function ClearInput(props){
+  const inRef = useRef(null);
+  const [hasUnc, setHasUnc] = useState(!!props.defaultValue);
+  const controlled = props.value !== undefined;
+  const show = controlled ? String(props.value == null ? "" : props.value).length > 0 : hasUnc;
+  const { wrapSt, inSt, rest } = clearableParts(props, false);
+  function setRefs(el){
+    inRef.current = el;
+    if (typeof props.inputRef === "function") props.inputRef(el);
+    else if (props.inputRef) props.inputRef.current = el;
+  }
+  function clear(){
+    const el = inRef.current;
+    if (!el) return;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    setter.call(el, "");
+    el.dispatchEvent(new Event("input", { bubbles:true }));
+    setHasUnc(false);
+    el.focus();
+  }
+  return (
+    <span className="clear-wrap" style={wrapSt}>
+      <input className="input" {...rest} ref={setRefs} style={inSt}
+        onInput={(e)=>{ if (!controlled) setHasUnc(!!e.target.value); if (rest.onInput) rest.onInput(e); }} />
+      {show ? <ClearX onClear={clear} /> : null}
+    </span>
+  );
+}
+function ClearArea(props){
+  const inRef = useRef(null);
+  const [hasUnc, setHasUnc] = useState(!!props.defaultValue);
+  const controlled = props.value !== undefined;
+  const show = controlled ? String(props.value == null ? "" : props.value).length > 0 : hasUnc;
+  const { wrapSt, inSt, rest } = clearableParts(props, true);
+  function clear(){
+    const el = inRef.current;
+    if (!el) return;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+    setter.call(el, "");
+    el.dispatchEvent(new Event("input", { bubbles:true }));
+    setHasUnc(false);
+    el.focus();
+  }
+  return (
+    <span className="clear-wrap" style={wrapSt}>
+      <textarea className={props.className || "textarea"} {...rest}
+        ref={(el)=>{ inRef.current = el; }} style={inSt}
+        onInput={(e)=>{ if (!controlled) setHasUnc(!!e.target.value); if (rest.onInput) rest.onInput(e); }} />
+      {show ? <ClearX onClear={clear} isArea /> : null}
+    </span>
+  );
+}
+
+/* ============================================================
    SWIPE ROW - the portfolio-standard swipe-left-to-delete (from Tracker).
    Swipe a row left to reveal a Delete action. Horizontal-only intent
    detection (|dx| > |dy|) plus touch-action:pan-y on the body, so vertical
@@ -1625,7 +1798,7 @@ function AuthScreen(){
       {ok && <div className="auth-msg ok">{ok}</div>}
       <div className="field">
         <label className="label">Email</label>
-        <input className="input" type="email" autoComplete="email" value={email}
+        <ClearInput type="email" autoComplete="email" value={email}
           onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" />
       </div>
       <div className="field">
@@ -1811,13 +1984,13 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
 
         <div className="field">
           <label className="label">Street</label>
-          <input className="input" value={street} onChange={e=>setStreet(e.target.value)} placeholder="656 River Way" />
+          <ClearInput value={street} onChange={e=>setStreet(e.target.value)} placeholder="656 River Way" />
           <div className="row" style={{gap:8, marginTop:8}}>
-            <input className="input" style={{flex:"1 1 auto",minWidth:0}} value={city}
+            <ClearInput style={{flex:"1 1 auto",minWidth:0}} value={city}
               onChange={e=>setCity(e.target.value)} placeholder="City" aria-label="City" />
-            <input className="input" style={{flex:"0 0 68px",minWidth:0,textTransform:"uppercase"}} value={stateAbbr}
+            <ClearInput style={{flex:"0 0 68px",minWidth:0,textTransform:"uppercase"}} value={stateAbbr}
               onChange={e=>setStateAbbr(e.target.value.toUpperCase().slice(0,2))} placeholder="ST" maxLength={2} aria-label="State" />
-            <input className="input" style={{flex:"0 0 92px",minWidth:0}} value={zip} inputMode="numeric"
+            <ClearInput style={{flex:"0 0 92px",minWidth:0}} value={zip} inputMode="numeric"
               onChange={e=>setZip(e.target.value.replace(/[^\d-]/g,"").slice(0,10))} placeholder="ZIP" aria-label="ZIP code" />
           </div>
           <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={handleLookup} disabled={busy!==""}>
@@ -1828,7 +2001,7 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
           </button>
           {showListing &&
             <div style={{marginTop:8}}>
-              <textarea className="textarea" value={listing} onChange={e=>setListing(e.target.value)}
+              <ClearArea value={listing} onChange={e=>setListing(e.target.value)}
                 placeholder="Paste the listing text (Zillow, Redfin, an MLS sheet, etc.)" />
               <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={handleParse} disabled={busy!==""}>
                 {busy==="listing" ? <span className="spin"></span> : "Fill from listing"}
@@ -1861,7 +2034,7 @@ function HomeSheet({ home, onSave, onDelete, onClose }){
         </div>
         <div className="field">
           <label className="label">Notes</label>
-          <textarea className="textarea" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Anything worth remembering about this property." />
+          <ClearArea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Anything worth remembering about this property." />
         </div>
         <button className="btn btn-primary btn-block" onClick={save} disabled={!name.trim()}>
           {home ? "Save changes" : "Add home"}
@@ -2009,7 +2182,7 @@ function ShareSheet({ home, onClose, onToast }){
         <div className="field">
           <label className="label">Their email address</label>
           <div style={{display:"flex", gap:8}}>
-            <input className="input" style={{flex:"1 1 auto", minWidth:0}} type="email"
+            <ClearInput style={{flex:"1 1 auto", minWidth:0}} type="email"
               autoComplete="off" autoCapitalize="none" spellCheck="false"
               value={email} onChange={e=>setEmail(e.target.value)}
               placeholder="them@example.com"
@@ -2196,13 +2369,13 @@ function EventSheet({ event, draft, homeId, systems, documents, onCreateSystem, 
           </div>
           <div className="field">
             <label className="label">Cost</label>
-            <input className="input" type="number" inputMode="decimal" value={cost} onChange={e=>setCost(e.target.value)} placeholder="$ optional" />
+            <ClearInput type="number" inputMode="decimal" value={cost} onChange={e=>setCost(e.target.value)} placeholder="$ optional" />
           </div>
         </div>
 
         <div className="field">
           <label className="label">Vendor / who did it</label>
-          <input className="input" value={vendor} onChange={e=>setVendor(e.target.value)} placeholder="Optional" />
+          <ClearInput value={vendor} onChange={e=>setVendor(e.target.value)} placeholder="Optional" />
         </div>
 
         {/* Tie the work to the actual equipment, so each unit builds its own
@@ -2216,7 +2389,7 @@ function EventSheet({ event, draft, homeId, systems, documents, onCreateSystem, 
 
         <div className="field">
           <label className="label">Notes</label>
-          <textarea className="textarea" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Details, part numbers, warranty info..." />
+          <ClearArea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Details, part numbers, warranty info..." />
         </div>
 
         {/* The invoice is a document, not a snapshot of the visit. Kept separate
@@ -2249,7 +2422,7 @@ function EventSheet({ event, draft, homeId, systems, documents, onCreateSystem, 
               </button>
               {pickDoc &&
                 <>
-                  <input className="input" style={{marginTop:8}} value={docQ} autoFocus
+                  <ClearInput style={{marginTop:8}} value={docQ} autoFocus
                     onChange={e=>setDocQ(e.target.value)} placeholder="Search documents" />
                   <div className="list" style={{marginTop:6, maxHeight:"26vh", overflowY:"auto"}}>
                     {(documents||[])
@@ -2464,7 +2637,7 @@ function ReminderSheet({ reminder, preset, homeId, onSave, onDelete, onClose }){
           {repeat &&
             <div className="row" style={{marginTop:12}}>
               <div className="field" style={{flex:"0 0 96px", marginBottom:0}}>
-                <input className="input" type="number" inputMode="numeric" min="1" value={every}
+                <ClearInput type="number" inputMode="numeric" min="1" value={every}
                   onChange={e=>setEvery(e.target.value)} />
               </div>
               <div className="field" style={{flex:1, marginBottom:0}}>
@@ -2478,7 +2651,7 @@ function ReminderSheet({ reminder, preset, homeId, onSave, onDelete, onClose }){
 
         <div className="field">
           <label className="label">Notes</label>
-          <textarea className="textarea" value={notes} onChange={e=>setNotes(e.target.value)}
+          <ClearArea value={notes} onChange={e=>setNotes(e.target.value)}
             placeholder="Filter size, part number, who to call..." />
         </div>
 
@@ -2695,12 +2868,12 @@ function ImportSheet({ homes, homeId, onHome, showDropbox, singleFile, onFiles, 
           <div>
             <div className="field">
               <label className="label">File link</label>
-              <input className="input" value={url} onChange={e=>setUrl(e.target.value)}
+              <ClearInput value={url} onChange={e=>setUrl(e.target.value)}
                 placeholder="Paste a Box, Drive, or direct file link" autoFocus />
             </div>
             <div className="field">
               <label className="label">Name (optional)</label>
-              <input className="input" value={name} onChange={e=>setName(e.target.value)}
+              <ClearInput value={name} onChange={e=>setName(e.target.value)}
                 placeholder="Leave blank to use the file name" />
             </div>
             <button className="btn btn-primary btn-block" onClick={submitLink} disabled={!url.trim()}>Import</button>
@@ -2782,7 +2955,7 @@ function DocSheet({ doc, homeName, readOnly, onSave, onDelete, onClose, onOpen, 
 
         <div className="field">
           <label className="label">Note</label>
-          <textarea className="textarea" value={note} onChange={e=>setNote(e.target.value)}
+          <ClearArea value={note} onChange={e=>setNote(e.target.value)}
             placeholder="Anything worth remembering about this document..." />
         </div>
 
@@ -2920,7 +3093,7 @@ function DocsScreen({ store, home, onAdd, onEdit, onOpen, onResort, onDelete }){
       </div>
 
       <div className="doc-tools">
-        <input className="input" value={query} onChange={e=>setQuery(e.target.value)}
+        <ClearInput value={query} onChange={e=>setQuery(e.target.value)}
           placeholder="Search documents" aria-label="Search documents" />
         <select className="select" value={sort} onChange={e=>setSort(e.target.value)} aria-label="Sort">
           <option value="date-desc">Newest</option>
@@ -3158,40 +3331,84 @@ function buildHomeContext(store, home){
   };
 }
 
-function AskBox({ store, home }){
+/* Ask is a CONVERSATION, not a one-shot lookup: the useful second question is
+   almost always a follow-up ("why?", "and the other unit?"), and re-typing the
+   whole thing to get it is the reason the first version felt thin.
+
+   The thread lives above this component, keyed by home, so walking off to a
+   document and back does not throw the conversation away. It is deliberately
+   NOT persisted to the server: it would be a new table for Chris to create and
+   a growing blob to sync, for something worth little once the session ends.
+   The home data is re-sent with every turn, so the answers stay current even
+   as the thread ages. */
+function AskBox({ store, home, thread, setThread }){
   const [q, setQ] = useState("");
-  const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const msgs = thread || [];               // [{role:"user"|"assistant"|"sys", text}]
+  const endRef = useRef(null);
+
   const ask = async () => {
     const question = q.trim();
     if(!question || busy) return;
-    setBusy(true); setErr(""); setAnswer("");
+    // Turns BEFORE this question drive the follow-up. `sys` notes are ours,
+    // not the model's, so they never go back up.
+    const history = msgs.filter(m => m.role === "user" || m.role === "assistant")
+                        .map(m => ({ role:m.role, content:m.text }));
+    const withQuestion = [...msgs, { role:"user", text:question }];
+    setQ(""); setErr(""); setThread(withQuestion);   // question shows immediately
+    setBusy(true);
     try{
-      const res = await askHome(question, buildHomeContext(store, home));
-      setAnswer((res && res.answer) || "No answer.");
-    }catch(e){ setErr(e.message || "Couldn't answer that."); }
+      const res = await askHome(question, buildHomeContext(store, home), history);
+      const next = [...withQuestion, { role:"assistant", text:(res && res.answer) || "(no answer)" }];
+      if(res && res.readDocument) next.push({ role:"sys", text:"Read from a document in this home" });
+      setThread(next);
+    }catch(e){
+      setErr(e.message || "Couldn't answer that.");
+      setThread(msgs);                     // roll the unanswered question back off
+      setQ(question);                      // and hand it back so it is not lost
+    }
     finally{ setBusy(false); }
   };
+
+  useEffect(() => {
+    if(endRef.current && msgs.length) endRef.current.scrollIntoView({ block:"nearest" });
+  }, [msgs.length, busy]);
+
   return (
     <div className="card ask-card">
+      {msgs.length > 0 &&
+        <button className="ask-clear" aria-label="Clear this conversation" title="Clear this conversation"
+          onClick={()=>{ setThread([]); setErr(""); }}>
+          <Icon d={ICONS.x} size={15}/>
+        </button>}
       <div className="ask-row">
-        <input className="input" value={q} onChange={e=>setQ(e.target.value)}
+        <ClearInput value={q} onChange={e=>setQ(e.target.value)}
           onKeyDown={e=>{ if(e.key==="Enter") ask(); }}
-          placeholder="Ask about this home…" aria-label="Ask about this home" />
+          placeholder={msgs.length ? "Ask a follow-up…" : "Ask about this home…"}
+          aria-label="Ask about this home" />
         <button className="btn btn-primary btn-sm ask-go" onClick={ask} disabled={busy || !q.trim()} aria-label="Ask">
           {busy ? <span className="spin"></span> : <Icon d={ICONS.sparkle} size={16}/>}
         </button>
       </div>
-      {answer && <div className="ask-answer">{answer}</div>}
+
+      {msgs.length > 0 &&
+        <div className="chat-scroll">
+          {msgs.map((m, i) =>
+            <div key={i} className={"bubble " + (m.role === "user" ? "user" : m.role === "sys" ? "sys" : "ai")}>
+              {m.text}
+            </div>)}
+          {busy && <div className="bubble sys">Thinking…</div>}
+          <div ref={endRef}></div>
+        </div>}
       {err && <div className="assist-msg" style={{marginTop:8}}>{err}</div>}
-      {!answer && !err && !busy &&
+      {!msgs.length && !err && !busy &&
         <div className="hint" style={{marginTop:8}}>Try "When was the generator last serviced?" or "How much have I spent on repairs?"</div>}
     </div>
   );
 }
 
-function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onRemovePhoto, onShare }){
+function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onRemovePhoto, onShare, askThread, setAskThread }){
   const readOnly = !!store.readOnly;
   const docs   = (store.data.documents||[]).filter(d => d.home_id === home.id);
   const events = (store.data.events||[]).filter(e => e.home_id === home.id);
@@ -3259,7 +3476,7 @@ function HomeOverview({ store, home, onEdit, onGoto, onOpenJob, onPickPhoto, onR
       {/* Ask reads documents server-side against the CALLER's own storage, so on
           a shared home it would silently answer without ever opening the file.
           Better to not offer it than to offer a worse version of it. */}
-      {!readOnly && <AskBox store={store} home={home} />}
+      {!readOnly && <AskBox store={store} home={home} thread={askThread} setThread={setAskThread} />}
 
       {chips.length>0 && <div className="facts">{chips}</div>}
 
@@ -3534,7 +3751,7 @@ function OrganizeSheet({ review, onApply, onClose }){
                         <Icon d={on && !gone ? ICONS.check : ICONS.plus} size={15}/>
                       </button>
                       <div className="item-body">
-                        <input className="input" style={{marginBottom:6, textDecoration: gone ? "line-through" : "none"}}
+                        <ClearInput style={{marginBottom:6, textDecoration: gone ? "line-through" : "none"}}
                           value={titleOf(r)} disabled={gone}
                           onChange={e=>setEdits(p => ({ ...p, [r.id]: e.target.value }))} />
                         {titleOf(r) !== r.was &&
@@ -3715,10 +3932,24 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
   // equipment, the people who service it, then everything else. Until then,
   // fall back to the section they were imported under.
   const byTitle = (a,b) => String(a.title||"").localeCompare(String(b.title||""), undefined, {numeric:true});
-  const sections = [];
-  matched.forEach(s => { const k = s.section || "General"; if(!sections.includes(k)) sections.push(k); });
-  sections.sort((a,b) => a==="General" ? 1 : b==="General" ? -1 : a.localeCompare(b));
-  const groups = sections.map(k => [k, matched.filter(s => (s.section||"General") === k).sort(byTitle)]);
+  // Bucket on the normalised key (see sectionKey), so an imported section and
+  // a typed one that differ only by an emoji or capitals share one heading.
+  // Sorting on the key rather than the label also puts an emoji-prefixed
+  // section in alphabetical order with the rest instead of ahead of them.
+  const order = [], bucket = new Map();
+  matched.forEach(s => {
+    const raw = String(s.section || "").trim();
+    const k = sectionKey(raw);                       // "" = no section
+    if(!bucket.has(k)){ bucket.set(k, { key:k, labels:new Map(), items:[] }); order.push(k); }
+    const b = bucket.get(k);
+    b.items.push(s);
+    const l = raw || "General";
+    b.labels.set(l, (b.labels.get(l) || 0) + 1);
+  });
+  const groups = order.map(k => {
+    const b = bucket.get(k);
+    return { key:k, label:bestSectionLabel(b.labels), items:b.items.sort(byTitle) };
+  }).sort((a,b) => a.key ? (b.key ? a.key.localeCompare(b.key) : -1) : 1);   // no-section last
 
   return (
     <div>
@@ -3739,7 +3970,7 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
         </div>}
 
       <div className="doc-tools">
-        <input className="input" value={query} onChange={e=>setQuery(e.target.value)}
+        <ClearInput value={query} onChange={e=>setQuery(e.target.value)}
           placeholder="Search" aria-label="Search" />
       </div>
 
@@ -3747,17 +3978,17 @@ function SystemsScreen({ store, home, view, onAdd, onEdit, onDelete, onImportTre
         <div className="empty" style={{padding:"40px 20px"}}><p>Nothing matches "{query}".</p></div>}
 
       {groups.map(g => {
-        const open = q ? true : (groups.length === 1 ? true : !!expanded[g[0]]);
+        const open = q ? true : (groups.length === 1 ? true : !!expanded[g.key]);
         return (
-          <div key={g[0]}>
-            <button className="doc-group" onClick={()=>toggle(g[0])} aria-expanded={open}>
-              <span className="doc-group-title">{g[0]}</span>
-              <span className="doc-group-count">{g[1].length}</span>
+          <div key={g.key}>
+            <button className="doc-group" onClick={()=>toggle(g.key)} aria-expanded={open}>
+              <span className="doc-group-title">{g.label}</span>
+              <span className="doc-group-count">{g.items.length}</span>
               <span className={"doc-group-chev"+(open?" open":"")}><Icon d={ICONS.chev} size={16}/></span>
             </button>
             {open &&
               <div className="list" style={{marginTop:0}}>
-                {g[1].map(s => <SystemRow key={s.id} s={s} jobs={jobCount[s.id]||0} onEdit={onEdit} onDelete={onDelete} />)}
+                {g.items.map(s => <SystemRow key={s.id} s={s} jobs={jobCount[s.id]||0} onEdit={onEdit} onDelete={onDelete} />)}
               </div>}
           </div>
         );
@@ -3770,6 +4001,7 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
   const s = system || {};
   const [title, setTitle] = useState(s.title || "");
   const [section, setSection] = useState(s.section || "");
+  const [newSection, setNewSection] = useState(false);   // typing one that does not exist yet
   const [notes, setNotes] = useState(s.notes || "");
   const [eq, setEq] = useState(s.equipment || {});     // nameplate facts
   const [installer, setInstaller] = useState(s.installer || "");
@@ -3845,10 +4077,15 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
     const now = nowISO();
     const clean = {};
     Object.keys(eq).forEach(k => { const v = String(eq[k]||"").trim(); if(v) clean[k] = v; });
+    // Last guard: a typed section that matches one already in use is stored
+    // with that section's own spelling, so the two never diverge on disk
+    // either. Belt and braces behind the picker above.
+    const secRaw = section.trim();
+    const secMatch = sectionCatalogue(siblings).find(c => c.key === sectionKey(secRaw));
     onSave({
       ...s,
       id: s.id || uid(), home_id: s.home_id || homeId,
-      title: t, section: section.trim(), notes: notes.trim(),
+      title: t, section: secMatch ? secMatch.label : secRaw, notes: notes.trim(),
       kind: kind || (classifyEntry({ title, notes, equipment: eq }).kind === 'mixed'
         ? 'equipment' : classifyEntry({ title, notes, equipment: eq }).kind),
       equipment: Object.keys(clean).length ? clean : null,
@@ -3879,9 +4116,45 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <label className="field-label">Title</label>
-        <input className="input" value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. HVAC - north side, Main House" />
+        <ClearInput value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. HVAC - north side, Main House" />
         <label className="field-label">Section</label>
-        <input className="input" value={section} onChange={e=>setSection(e.target.value)} placeholder="e.g. HVAC Systems" />
+        {/* Free text here is what put two HVAC Systems headings on the screen:
+            the sections already in use came off Trello list names carrying an
+            emoji, and no one retypes those. Offer what exists; keep typing for
+            a genuinely new one. Same reasoning as the system picker. */}
+        {(() => {
+          const cat = sectionCatalogue(siblings);
+          const known = cat.find(c => c.key === sectionKey(section));
+          if(newSection || !cat.length){
+            return (
+              <>
+                <ClearInput value={section} onChange={e=>setSection(e.target.value)}
+                  placeholder="e.g. HVAC Systems" />
+                {known && sectionKey(section) &&
+                  <div className="hint" style={{color:"var(--amber)"}}>
+                    Saves into the existing "{known.label}".
+                  </div>}
+                {cat.length > 0 &&
+                  <button className="assist-toggle"
+                    onClick={()=>{ setNewSection(false); setSection(s.section || ""); }}>
+                    Choose an existing section
+                  </button>}
+              </>
+            );
+          }
+          return (
+            <select className="select" value={known ? known.key : ""}
+              onChange={e => {
+                if(e.target.value === "__new"){ setNewSection(true); setSection(""); return; }
+                const c = cat.find(x => x.key === e.target.value);
+                setSection(c ? c.label : "");
+              }}>
+              <option value="">No section</option>
+              {cat.map(c => <option key={c.key} value={c.key}>{c.label} ({c.count})</option>)}
+              <option value="__new">New section…</option>
+            </select>
+          );
+        })()}
 
         {/* Classify at capture, not in a batch later: show what this looks like
             and let it be corrected in one tap. Never assigned silently. */}
@@ -3946,11 +4219,11 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
         {EQ_ROWS.map(([k,label,ph]) => (
           <div key={k}>
             <label className="field-label">{label}</label>
-            <input className="input" value={eq[k]||""} onChange={e=>setField(k, e.target.value)} placeholder={ph} />
+            <ClearInput value={eq[k]||""} onChange={e=>setField(k, e.target.value)} placeholder={ph} />
           </div>
         ))}
         <label className="field-label">Installed by</label>
-        <input className="input" value={installer} onChange={e=>setInstaller(e.target.value)} placeholder="e.g. Schmidt Mechanical Group" />
+        <ClearInput value={installer} onChange={e=>setInstaller(e.target.value)} placeholder="e.g. Schmidt Mechanical Group" />
 
         {/* Warranty registration is the single fact that decides whether parts are
             covered, and it is knowable once and never again. Record the answer so
@@ -3983,7 +4256,7 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
         })()}
 
         <label className="field-label">Details</label>
-        <textarea className="input" style={{minHeight:90, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
+        <ClearArea className="input" style={{minHeight:90, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
           placeholder="Anything else worth remembering about this system." />
 
         {/* Related notes: the imported context that explains this equipment. */}
@@ -4024,7 +4297,7 @@ function SystemSheet({ system, homeId, presetKind, history, siblings, onEditEntr
                 <div className="hint">Attach the imported notes that describe this equipment, and its history travels with it.</div>}
               {linking &&
                 <>
-                  <input className="input" value={linkQ} onChange={e=>setLinkQ(e.target.value)} autoFocus
+                  <ClearInput value={linkQ} onChange={e=>setLinkQ(e.target.value)} autoFocus
                     placeholder="Search notes to attach" aria-label="Search notes" />
                   <div className="list" style={{marginTop:6, maxHeight:"26vh", overflowY:"auto"}}>
                     {avail.map(x => (
@@ -4123,20 +4396,20 @@ function PolicySheet({ policy, homeId, prefill, sourceDoc, onSave, onDelete, onC
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
         <label className="field-label">Provider</label>
-        <input className="input" value={provider} onChange={e=>setProvider(e.target.value)} placeholder="e.g. American Home Shield" autoFocus />
+        <ClearInput value={provider} onChange={e=>setProvider(e.target.value)} placeholder="e.g. American Home Shield" autoFocus />
         <label className="field-label">Type</label>
         <div className="pills">
           {POLICY_KINDS.map(k =>
             <button key={k} className={"pill "+(kind===k?"on":"")} onClick={()=>setKind(k)}>{k}</button>)}
         </div>
         <label className="field-label">Plan name</label>
-        <input className="input" value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="e.g. ShieldComplete Buyer" />
+        <ClearInput value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="e.g. ShieldComplete Buyer" />
         <label className="field-label">Policy / plan number</label>
-        <input className="input" value={policyNo} onChange={e=>setPolicyNo(e.target.value)} placeholder="Optional" />
+        <ClearInput value={policyNo} onChange={e=>setPolicyNo(e.target.value)} placeholder="Optional" />
         <label className="field-label">Claims phone</label>
-        <input className="input" type="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Optional" />
+        <ClearInput type="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Optional" />
         <label className="field-label">Service fee per visit</label>
-        <input className="input" value={serviceFee} onChange={e=>setServiceFee(e.target.value)} placeholder="e.g. $100.00" />
+        <ClearInput value={serviceFee} onChange={e=>setServiceFee(e.target.value)} placeholder="e.g. $100.00" />
         <div className="hint">The number to weigh against a contractor's own diagnostic charge.</div>
         <div className="row">
           <div className="field" style={{flex:1}}>
@@ -4149,17 +4422,17 @@ function PolicySheet({ policy, homeId, prefill, sourceDoc, onSave, onDelete, onC
           </div>
         </div>
         <label className="field-label">Covered systems</label>
-        <textarea className="input" style={{minHeight:64, resize:"vertical"}} value={coveredSystems}
+        <ClearArea className="input" style={{minHeight:64, resize:"vertical"}} value={coveredSystems}
           onChange={e=>setCoveredSystems(e.target.value)} placeholder="e.g. Heating; Air Conditioning System; Ductwork" />
         <label className="field-label">Covered appliances</label>
-        <textarea className="input" style={{minHeight:56, resize:"vertical"}} value={coveredAppliances}
+        <ClearArea className="input" style={{minHeight:56, resize:"vertical"}} value={coveredAppliances}
           onChange={e=>setCoveredAppliances(e.target.value)} placeholder="Optional" />
         {doc &&
           <div className="hint" style={{marginTop:8}}>
             Read from <strong>{doc.name}</strong>, kept in your documents.
           </div>}
         <label className="field-label">Notes</label>
-        <textarea className="input" style={{minHeight:70, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
+        <ClearArea className="input" style={{minHeight:70, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
           placeholder="Waiting periods, caps, how to file." />
         <button className="btn btn-primary btn-block" style={{marginTop:14}} disabled={!provider.trim()} onClick={save}>
           {policy ? "Save changes" : "Add coverage"}
@@ -4227,7 +4500,7 @@ function DocPickerSheet({ docs, onPick, onClose }){
           <h2 className="sheet-title">Which document?</h2>
           <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
         </div>
-        <input className="input" value={q} onChange={e=>setQ(e.target.value)}
+        <ClearInput value={q} onChange={e=>setQ(e.target.value)}
           placeholder="Search all documents" aria-label="Search documents" autoFocus />
         <div className="hint">
           {query ? matched.length + " match" + (matched.length===1?"":"es")
@@ -4336,7 +4609,7 @@ function SystemPicker({ systems, value, onChange, onCreate, placeholder }){
   }
   return (
     <div>
-      <input className="input" value={q} onChange={e=>setQ(e.target.value)} autoFocus
+      <ClearInput value={q} onChange={e=>setQ(e.target.value)} autoFocus
         placeholder={"Search " + (systems||[]).length + " systems & notes"} aria-label="Search systems" />
       <div className="list" style={{marginTop:6, maxHeight:"34vh", overflowY:"auto"}}>
         {/* Nothing fits? Name it here rather than leaving and losing your place. */}
@@ -4447,7 +4720,7 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
         </div>
 
         <label className="field-label">What's happening</label>
-        <input className="input" value={title} onChange={e=>setTitle(e.target.value)}
+        <ClearInput value={title} onChange={e=>setTitle(e.target.value)}
           placeholder="e.g. North AC not cooling" autoFocus={!job} />
 
         {homes && homes.length > 1 &&
@@ -4507,9 +4780,9 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
             {cov.policyId &&
               <>
                 <label className="field-label">Claim number</label>
-                <input className="input" value={cov.claimNo||""} onChange={e=>setCovField("claimNo", e.target.value)} placeholder="Once filed" />
+                <ClearInput value={cov.claimNo||""} onChange={e=>setCovField("claimNo", e.target.value)} placeholder="Once filed" />
                 <label className="field-label">Coverage decision</label>
-                <textarea className="input" style={{minHeight:64, resize:"vertical"}} value={cov.determination||""}
+                <ClearArea className="input" style={{minHeight:64, resize:"vertical"}} value={cov.determination||""}
                   onChange={e=>setCovField("determination", e.target.value)}
                   placeholder="What the warranty company decides: covered, denied, partial, and why." />
                 <div className="hint">The insurer&rsquo;s answer. A contractor&rsquo;s findings belong on their visit in the timeline.</div>
@@ -4520,7 +4793,7 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
         )}
 
         <label className="field-label">Symptom &amp; details</label>
-        <textarea className="input" style={{minHeight:80, resize:"vertical"}} value={symptom} onChange={e=>setSymptom(e.target.value)}
+        <ClearArea className="input" style={{minHeight:80, resize:"vertical"}} value={symptom} onChange={e=>setSymptom(e.target.value)}
           placeholder="What it's doing, when it started, any codes shown." />
 
         {job &&
@@ -4558,7 +4831,7 @@ function JobSheet({ job, homeId, homes, systems, policies, history, onCreateSyst
           </>}
 
         <label className="field-label">Notes</label>
-        <textarea className="input" style={{minHeight:64, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
+        <ClearArea className="input" style={{minHeight:64, resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}
           placeholder="Questions to ask, who said what." />
 
         <button className="btn btn-primary btn-block" style={{marginTop:14}} disabled={!title.trim()} onClick={save}>
@@ -4672,6 +4945,9 @@ function App(){
   const [view, setView] = useState("houses");   // "houses" (top level) | "home" (inside one)
   const [tab, setTab] = useState("overview");    // section within a home
   const [navStack, setNavStack] = useState([]);  // in-home back trail (tab keys)
+  // Ask conversations, keyed by home id, so leaving the overview to look at a
+  // document and coming back does not discard the thread. Session-only.
+  const [askThreads, setAskThreads] = useState({});
   const [sheet, setSheet] = useState(null);   // null | {home}
   const [addSheet, setAddSheet] = useState(false);      // center-+ Add sheet (in-home)
   const [eventSheet, setEventSheet] = useState(null);   // null | {event}
@@ -5689,7 +5965,9 @@ function App(){
           ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updMsg={updMsg} update={update} onApplyUpdate={applyUpdate} />
           : inHome
             ? (
-                tab==="overview" ? <HomeOverview store={viewStore} home={activeHome} onEdit={()=>setSheet({home:activeHome})} onGoto={goTab} onOpenJob={(j)=>setJobSheet({job:j})} onPickPhoto={()=>pickHomePhoto(activeHome.id)} onRemovePhoto={()=>removeHomePhoto(activeHome.id)} onShare={()=>setShareSheet(activeHome)} />
+                tab==="overview" ? <HomeOverview store={viewStore} home={activeHome} onEdit={()=>setSheet({home:activeHome})} onGoto={goTab} onOpenJob={(j)=>setJobSheet({job:j})} onPickPhoto={()=>pickHomePhoto(activeHome.id)} onRemovePhoto={()=>removeHomePhoto(activeHome.id)} onShare={()=>setShareSheet(activeHome)}
+                    askThread={askThreads[activeHome.id] || []}
+                    setAskThread={(t)=>setAskThreads(p => ({ ...p, [activeHome.id]: t }))} />
               : tab==="docs"     ? <DocsScreen store={viewStore} home={activeHome} onAdd={openImport} onEdit={(d)=>setDocSheet({doc:d})} onOpen={openDoc} onResort={()=>resortDocs(activeHome)}
                                      onDelete={(d)=>{ if(confirm("Delete this document? The file is removed from storage.")) deleteDoc(d); }} />
               : tab==="log"      ? <LogScreen store={viewStore} home={activeHome} onAdd={()=>setEventSheet({event:null})} onEdit={(e)=>setEventSheet({event:e})}
