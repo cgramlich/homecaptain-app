@@ -375,7 +375,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.46.0";
+const APP_VERSION = "0.47.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 const BUILD = "2026-08-01.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
@@ -737,6 +737,28 @@ async function readNameplate(path){
 }
 // Ask a natural-language question about one home; the client sends a compact
 // context (facts + log + reminders + document names) and gets a grounded answer.
+/* Bill-by-email. The inbox is server-side and deliberately OUTSIDE the
+   collections sync: a client push must never be able to delete an item that
+   arrived while this device was offline. */
+async function emailApi(path, opts){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + path, {
+    ...(opts||{}),
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json",
+              ...((opts&&opts.headers)||{}) },
+  });
+  if(!r.ok){
+    let detail=""; try{ detail=(await r.json()).detail||""; }catch(e){}
+    throw new Error(detail || ("Email intake failed ("+r.status+")."));
+  }
+  return r.status === 204 ? null : await r.json();
+}
+const emailSetupGet   = ()          => emailApi("/api/email/setup");
+const emailInboxGet   = ()          => emailApi("/api/email/inbox");
+const emailSendersPut = (senders)   => emailApi("/api/email/senders", { method:"PUT", body: JSON.stringify({ senders }) });
+const emailInboxDel   = (id)        => emailApi("/api/email/inbox/"+encodeURIComponent(id), { method:"DELETE" });
+
 async function askHome(question, context, history){
   const token = await authToken();
   if(!token) throw new Error("Not signed in");
@@ -2238,10 +2260,16 @@ function ComingSoon({ title, blurb, glyph }){
   );
 }
 
-function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate }){
+function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate,
+                         emailSetup, onSaveSenders, emailBusy }){
   const [showLog, setShowLog] = useState(false);
   return (
     <div>
+      {/* Lives in Settings because the address is needed BEFORE any mail has
+          arrived; the overview card only appears once something is waiting. */}
+      <div className="set-group">Bills by email</div>
+      <EmailSetupCard setup={emailSetup} onSaveSenders={onSaveSenders} busy={emailBusy} />
+
       <div className="set-group">Account</div>
       <div className="card">
         <div className="subtle" style={{marginBottom:10}}>{store.authEmail || "Signed in"}</div>
@@ -3405,6 +3433,158 @@ function AskBox({ store, home, thread, setThread }){
       {!msgs.length && !err && !busy &&
         <div className="hint" style={{marginTop:8}}>Try "When was the generator last serviced?" or "How much have I spent on repairs?"</div>}
     </div>
+  );
+}
+
+/* ============================================================
+   BILL BY EMAIL - the review side.
+   Forwarded bills land in a server-side inbox (see the backend's email
+   module for why they never go straight into `documents`). Nothing files
+   itself: the inbox is where the home is chosen, the category confirmed,
+   and an unverified sender is visible before anything joins the house
+   record. Filing then runs the ORDINARY document path, so the same
+   classifier and the same record shape apply as a folder import.
+   ============================================================ */
+function EmailSetupCard({ setup, onSaveSenders, busy }){
+  const [adding, setAdding] = useState("");
+  const senders = (setup && setup.senders) || [];
+  if(!setup) return null;
+  if(!setup.configured){
+    return (
+      <div className="card">
+        <p className="hint" style={{margin:0}}>
+          Bill intake is not switched on yet. It needs the Resend key and webhook
+          secret set on the server.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="card">
+      {setup.hasDomain
+        ? <>
+            <div className="subtle" style={{marginBottom:6}}>Forward bills to</div>
+            <div className="ask-answer" style={{marginTop:0, userSelect:"all", wordBreak:"break-all"}}>{setup.address}</div>
+            <button className="assist-toggle" onClick={()=>{
+              if(navigator.clipboard) navigator.clipboard.writeText(setup.address);
+            }}>Copy address</button>
+            <p className="hint">Anything sent here lands in your inbox for review. The address is
+              private, so treat it like a password.</p>
+          </>
+        : <>
+            <p className="hint" style={{marginTop:0}}>
+              Forward bills to the address shown in Resend. Until HomeCaptain has its own
+              mail domain there is one shared address, so the list below is what tells it
+              the mail is yours.
+            </p>
+            <div className="subtle" style={{margin:"10px 0 6px"}}>Addresses you send from</div>
+            {senders.map((s, i) =>
+              <div key={s} className="doc-tools" style={{marginTop:0}}>
+                <div className="ask-answer" style={{marginTop:0, flex:1, wordBreak:"break-all"}}>{s}</div>
+                <button className="assist-toggle" style={{marginTop:0}} disabled={busy}
+                  onClick={()=>onSaveSenders(senders.filter((_, j) => j !== i))}>Remove</button>
+              </div>)}
+            <div className="doc-tools">
+              <ClearInput value={adding} onChange={e=>setAdding(e.target.value)}
+                type="email" placeholder="you@example.com" aria-label="Add a sending address" />
+              <button className="btn btn-ghost btn-sm" style={{margin:0}} disabled={busy || !adding.trim()}
+                onClick={()=>{ onSaveSenders([...senders, adding.trim()]); setAdding(""); }}>Add</button>
+            </div>
+            <p className="hint">
+              A From address can be forged, so mail matched this way is marked unverified
+              and still has to be filed by hand. That is the point of the review step.
+            </p>
+          </>}
+    </div>
+  );
+}
+
+function EmailInboxSheet({ items, homes, defaultHomeId, onFile, onDiscard, onClose, busyId }){
+  const [homeFor, setHomeFor] = useState({});
+  const [logFor, setLogFor] = useState({});
+  const homeOf = (it) => homeFor[it.id] || defaultHomeId || (homes[0] && homes[0].id) || "";
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{items.length} {items.length === 1 ? "bill" : "bills"} by email</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        {!items.length &&
+          <div className="empty" style={{padding:"30px 10px"}}>
+            <p>Nothing waiting. Forwarded bills show up here.</p>
+          </div>}
+
+        {items.map(it => {
+          const s = it.suggested || {};
+          const file = (it.files || [])[0];
+          return (
+            <div className="card" key={it.id} style={{marginBottom:12}}>
+              <div style={{fontWeight:600, fontSize:15, wordBreak:"break-word"}}>{it.subject || "(no subject)"}</div>
+              <div className="hint" style={{marginTop:2, wordBreak:"break-word"}}>{it.from}</div>
+
+              {!it.senderVerified &&
+                <div className="assist-msg" style={{marginTop:8}}>
+                  Matched on the sender address, which can be forged. Check it before filing.
+                </div>}
+
+              {it.portalOnly &&
+                <div className="assist-msg" style={{marginTop:8}}>
+                  Nothing to file: this email only links to the provider's site, and the bill
+                  itself sits behind their login.
+                </div>}
+
+              {file &&
+                <div className="hint" style={{marginTop:8}}>
+                  {(it.files || []).map(f => f.name).join(", ")}
+                  {it.bodyRendered ? " (built from the email body, nothing was attached)" : ""}
+                </div>}
+
+              {(s.vendor || s.amount || s.date) &&
+                <div className="facts" style={{marginTop:8}}>
+                  {s.vendor && <span className="chip">{s.vendor}</span>}
+                  {s.amount != null && <span className="chip">{("$"+fmtNum(s.amount))}</span>}
+                  {s.date && <span className="chip">{s.date}</span>}
+                </div>}
+
+              {(it.skipped || []).length > 0 &&
+                <p className="hint">Not stored: {(it.skipped || []).join(", ")}</p>}
+
+              {!it.portalOnly && <>
+                {homes.length > 1 &&
+                  <>
+                    <label className="field-label">File under</label>
+                    <select className="select" value={homeOf(it)}
+                      onChange={e=>setHomeFor(p => ({ ...p, [it.id]: e.target.value }))}>
+                      {homes.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+                    </select>
+                  </>}
+                {s.amount != null &&
+                  <button className="pill" style={{marginTop:10}}
+                    aria-pressed={logFor[it.id] !== false}
+                    onClick={()=>setLogFor(p => ({ ...p, [it.id]: p[it.id] === false }))}>
+                    {logFor[it.id] === false ? "Document only" : "Also log the " + ("$"+fmtNum(s.amount)) + " spend"}
+                  </button>}
+              </>}
+
+              <div className="doc-tools" style={{marginTop:12}}>
+                {!it.portalOnly &&
+                  <button className="btn btn-primary btn-sm" style={{margin:0, flex:1}}
+                    disabled={busyId === it.id || !homeOf(it)}
+                    onClick={()=>onFile(it, homeOf(it), logFor[it.id] !== false)}>
+                    {busyId === it.id ? "Filing…" : "File it"}
+                  </button>}
+                <button className="btn btn-ghost btn-sm" style={{margin:0}}
+                  disabled={busyId === it.id} onClick={()=>onDiscard(it)}>Discard</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -4948,6 +5128,12 @@ function App(){
   // Ask conversations, keyed by home id, so leaving the overview to look at a
   // document and coming back does not discard the thread. Session-only.
   const [askThreads, setAskThreads] = useState({});
+  // Bills forwarded by email, waiting to be filed. Server-side, so this is a
+  // fetch rather than part of the collections sync.
+  const [emailSetup, setEmailSetup] = useState(null);
+  const [emailItems, setEmailItems] = useState([]);
+  const [emailSheet, setEmailSheet] = useState(false);
+  const [emailBusy, setEmailBusy] = useState("");
   const [sheet, setSheet] = useState(null);   // null | {home}
   const [addSheet, setAddSheet] = useState(false);      // center-+ Add sheet (in-home)
   const [eventSheet, setEventSheet] = useState(null);   // null | {event}
@@ -5105,6 +5291,93 @@ function App(){
     showToast("Shared with you - view only");
     return true;
   };
+  // Refreshed on sign-in and on resume, the same moments the update check uses:
+  // mail arrives while the app is closed, so a cold value would always be stale.
+  const refreshEmail = useCallback(async () => {
+    if(!store.authed) return;
+    try{
+      const [setup, items] = await Promise.all([emailSetupGet(), emailInboxGet()]);
+      setEmailSetup(setup);
+      setEmailItems(Array.isArray(items) ? items : []);
+    }catch(e){ log("EMAIL", "refresh failed: " + (e.message||"")); }
+  }, [store.authed]);
+
+  useEffect(() => { refreshEmail(); }, [refreshEmail]);
+  useEffect(() => {
+    const onVis = () => { if(document.visibilityState === "visible") refreshEmail(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [refreshEmail]);
+
+  const saveSenders = async (senders) => {
+    setEmailBusy("senders");
+    try{
+      const res = await emailSendersPut(senders);
+      setEmailSetup(p => ({ ...(p||{}), senders: (res && res.senders) || [] }));
+    }catch(e){ showToast(e.message || "Couldn't save that"); }
+    finally{ setEmailBusy(""); }
+  };
+
+  // Filing goes through the ORDINARY document records, so an emailed bill is
+  // indistinguishable from an imported one afterwards - same shape, same
+  // classifier, same storage path. The inbox row is deleted only after the
+  // save, so a failure leaves the bill waiting rather than losing it.
+  const fileEmailItem = async (item, homeId, alsoLog) => {
+    if(!homeId) return;
+    setEmailBusy(item.id);
+    try{
+      const now = nowISO();
+      // An emailed bill has no FOLDER, which is what usually rescues a document
+      // whose filename says nothing ("CPS Energy July.pdf" reads as Other). The
+      // AI that read the bill already named its category, so use that when the
+      // filename classifier gives up - but only if it is a category this app
+      // actually has, never a value invented by a model.
+      const sugCat = (item.suggested || {}).category;
+      const catFor = (name) => {
+        const byName = classifyDoc(name);
+        if(byName !== "Other") return byName;
+        return DOC_CATEGORIES.some(c => c.k === sugCat) ? sugCat : byName;
+      };
+      const docs = (item.files || []).map(f => ({
+        id: uid(), home_id: homeId,
+        name: stripExt(f.name), category: catFor(f.name),
+        path: f.path, size: f.size || 0, mime: f.type || "",
+        sourceName: "Email: " + (item.subject || item.from || "forwarded"),
+        note: "", createdAt: now, updatedAt: now,
+      }));
+      if(docs.length) saveColl("documents", [...docs, ...(store.data.documents || [])]);
+
+      const sug = item.suggested || {};
+      if(alsoLog && sug.amount != null){
+        const ev = {
+          id: uid(), home_id: homeId,
+          title: sug.title || sug.vendor || (item.subject || "Bill"),
+          category: sug.category || "Utilities",
+          date: sug.date || null,              // never default to today - a false date is worse than none
+          cost: sug.amount, vendor: sug.vendor || "",
+          notes: sug.notes || "", photos: [],
+          receipt: docs.length ? docs[0].path : null,
+          source: "email", createdAt: now, updatedAt: now,
+        };
+        saveColl("events", [ev, ...(store.data.events || [])]);
+      }
+
+      await emailInboxDel(item.id);
+      setEmailItems(list => list.filter(x => x.id !== item.id));
+      showToast(docs.length === 1 ? "Filed to Documents" : docs.length + " files filed");
+    }catch(e){ showToast(e.message || "Couldn't file that"); }
+    finally{ setEmailBusy(""); }
+  };
+
+  const discardEmailItem = async (item) => {
+    setEmailBusy(item.id);
+    try{
+      await emailInboxDel(item.id);
+      setEmailItems(list => list.filter(x => x.id !== item.id));
+    }catch(e){ showToast(e.message || "Couldn't discard that"); }
+    finally{ setEmailBusy(""); }
+  };
+
   const saveColl = (file, items) => {
     if(blockedWrite()) return;
     store.saveCollection(file, items);
@@ -5961,8 +6234,23 @@ function App(){
       </div>
 
       <div className="screen">
+        {/* Waiting bills sit ABOVE everything, on every screen: mail arrives
+            whenever it arrives, and an inbox nobody notices is worse than no
+            inbox. Hidden on a shared home, where filing is not allowed. */}
+        {!inSettings && !isShared && emailItems.length > 0 &&
+          <button className="hub-card" style={{marginBottom:12}} onClick={()=>setEmailSheet(true)}>
+            <span className="hub-card-ic"><Icon d={ICONS.upload} size={19}/></span>
+            <span className="hub-card-body">
+              <span className="hub-card-title">
+                {emailItems.length} {emailItems.length===1 ? "bill" : "bills"} arrived by email
+              </span>
+              <span className="hint">Review and file {emailItems.length===1 ? "it" : "them"}</span>
+            </span>
+            <Icon d={ICONS.chev} size={16}/>
+          </button>}
         {inSettings
-          ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updMsg={updMsg} update={update} onApplyUpdate={applyUpdate} />
+          ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updMsg={updMsg} update={update} onApplyUpdate={applyUpdate}
+              emailSetup={emailSetup} onSaveSenders={saveSenders} emailBusy={emailBusy==="senders"} />
           : inHome
             ? (
                 tab==="overview" ? <HomeOverview store={viewStore} home={activeHome} onEdit={()=>setSheet({home:activeHome})} onGoto={goTab} onOpenJob={(j)=>setJobSheet({job:j})} onPickPhoto={()=>pickHomePhoto(activeHome.id)} onRemovePhoto={()=>removeHomePhoto(activeHome.id)} onShare={()=>setShareSheet(activeHome)}
@@ -6117,6 +6405,12 @@ function App(){
           homeName={((homes.concat(sharedHomes)).find(h=>h.id===docSheet.doc.home_id)||{}).name || ""}
           onSave={saveDoc} onDelete={deleteDoc} onOpen={openDoc}
           onExtract={extractDoc} onApply={applyDocFacts} onClose={()=>setDocSheet(null)} />}
+
+      {emailSheet &&
+        <EmailInboxSheet items={emailItems} homes={store.data.homes || []}
+          defaultHomeId={store.cfg.activeHomeId} busyId={emailBusy}
+          onFile={fileEmailItem} onDiscard={discardEmailItem}
+          onClose={()=>setEmailSheet(false)} />}
 
       {shareSheet &&
         <ShareSheet home={shareSheet} onToast={showToast} onClose={()=>setShareSheet(null)} />}
